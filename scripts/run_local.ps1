@@ -36,7 +36,10 @@ $py = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python"
 
 git pull --rebase
 $raw = "$Source-raw-$(Get-Date -Format yyyyMMdd-HHmm).tar.gz.enc"   # 生の HTML(暗号化)。この PC に残す(.gitignore 済み)
-& $py scripts\stock_archive.py --source $Source --mode $Mode --codes $Codes --max-minutes $MaxMinutes --delay $Delay --raw-out $raw
+# Windows PowerShell 5.1 は空の引数 "" を外部コマンドに渡さないので、--codes は指定したときだけ付ける
+$archiveArgs = @("scripts\stock_archive.py", "--source", $Source, "--mode", $Mode, "--max-minutes", $MaxMinutes, "--delay", $Delay, "--raw-out", $raw)
+if ($Codes) { $archiveArgs += @("--codes", $Codes) }
+& $py @archiveArgs
 if ($LASTEXITCODE -ne 0) { throw "取得に失敗しました(上のメッセージを確認してください)" }
 
 git add "data/$Source"
