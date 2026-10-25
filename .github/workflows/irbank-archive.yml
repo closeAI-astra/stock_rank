@@ -1,0 +1,84 @@
+name: IRBANK archive
+
+# IRBANK の個別銘柄ページ(信用残・空売り・貸借など)を取得し、暗号化して data/irbank/ に保存する。
+# 1回は最大約5時間で区切り、続きは次の実行で未取得の銘柄から再開する(毎日の定期実行でも再開)。
+on:
+  workflow_dispatch:
+    inputs:
+      codes:
+        description: "銘柄コード(カンマ区切り。空=Future Sight の全銘柄)"
+        required: false
+        default: ""
+      max_minutes:
+        description: "この実行の上限(分)"
+        required: false
+        default: "300"
+      delay:
+        description: "リクエスト間隔(秒)"
+        required: false
+        default: "1.5"
+      refetch_days:
+        description: "この日数より古い取得済み銘柄も取り直す(0=未取得だけ)"
+        required: false
+        default: "0"
+  schedule:
+    - cron: "17 18 * * *" # 毎日 03:17 JST(未取得・7日より古い銘柄を進める)
+
+permissions:
+  contents: write
+
+concurrency:
+  group: irbank-archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "cryptography==43.0.3"
+      - name: Check secret
+        env:
+          FS_PAGES_PASSWORD: ${{ secrets.FS_PAGES_PASSWORD }}
+        run: |
+          if [ -z "$FS_PAGES_PASSWORD" ]; then
+            echo "::error::Secrets に FS_PAGES_PASSWORD(Future Sight と同じパスワード)を登録してください。"
+            exit 1
+          fi
+      - name: Archive IRBANK pages
+        env:
+          FS_PAGES_PASSWORD: ${{ secrets.FS_PAGES_PASSWORD }}
+        run: |
+          python scripts/irbank_archive.py \
+            --codes "${{ inputs.codes }}" \
+            --max-minutes "${{ inputs.max_minutes || '300' }}" \
+            --delay "${{ inputs.delay || '1.5' }}" \
+            --refetch-days "${{ inputs.refetch_days || (github.event_name == 'schedule' && '7') || '0' }}" \
+            --raw-out raw.tar.gz.enc \
+            --release-tag "irbank-raw-${{ github.run_id }}"
+      - name: Upload raw HTML (encrypted) to a release
+        if: ${{ !cancelled() && hashFiles('raw.tar.gz.enc') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "irbank-raw-${{ github.run_id }}" raw.tar.gz.enc \
+            --target "${{ github.sha }}" --prerelease \
+            --title "IRBANK raw HTML ${{ github.run_id }}" \
+            --notes "IRBANK の生 HTML(暗号化)。復号: python scripts/decrypt_raw.py raw.tar.gz.enc raw.tar.gz"
+      - name: Commit
+        if: ${{ !cancelled() }}
+        run: |
+          git config user.name "stock-rank-bot"
+          git config user.email "stock-rank-bot@users.noreply.github.com"
+          git add data/irbank
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -m "IRBANK archive $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3 4; do
+            git pull --rebase origin "${{ github.ref_name }}" && git push origin "HEAD:${{ github.ref_name }}" && exit 0
+            sleep $((i * 5))
+          done
+          exit 1

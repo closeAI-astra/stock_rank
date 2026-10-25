@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Stock Rank</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/css/app.css">
+  <script>try { const t = localStorage.getItem("stockrank-theme"); if (t) document.documentElement.dataset.theme = t; } catch { /* */ }</script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#chart"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l5-6 4 3 6-8 3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Stock Rank</b></a>
+    <nav class="mainnav" aria-label="ページ">
+      <a href="#chart" data-nav="chart">チャート</a>
+      <a href="#rank" data-nav="rank">ランキング・信用</a>
+      <a href="#macro" data-nav="macro">マクロ・貿易</a>
+      <a href="#archive" data-nav="archive">IRBANK 保存</a>
+      <a href="#about" data-nav="about">使い方</a>
+    </nav>
+    <div class="topbar-right">
+      <div class="symsearch"><input id="symSearch" type="search" placeholder="銘柄コード・名前" autocomplete="off" aria-label="銘柄を検索"><div id="symResults" class="symresults" hidden></div></div>
+      <span id="asOf" class="asof"></span>
+      <button type="button" id="themeBtn" class="icon-btn" title="明るさを切り替え" aria-label="テーマ切り替え">◐</button>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- チャート(TradingView 型) -->
+    <section class="view" data-view="chart">
+      <div class="tv-toolbar">
+        <button type="button" id="tvSymbol" class="tv-sym" title="銘柄を検索">—</button>
+        <div class="tv-group" role="group" aria-label="足">
+          <button type="button" data-interval="1d" class="active">日足</button><button type="button" data-interval="1w">週足</button><button type="button" data-interval="1mo">月足</button>
+        </div>
+        <select id="tvType" aria-label="チャートの種類"><option value="candle">ローソク足</option><option value="ha">平均足</option><option value="bar">バー</option><option value="line">ライン</option><option value="area">エリア</option></select>
+        <details class="tv-menu"><summary>インジケーター</summary><div class="tv-menu-body" id="tvIndMenu"></div></details>
+        <details class="tv-menu"><summary>サブチャート</summary><div class="tv-menu-body" id="tvPaneMenu"></div></details>
+        <div class="tv-group ai" role="group" aria-label="AI予測">
+          <label><input type="checkbox" id="tvAi" checked> AI予測</label>
+          <select id="tvHorizon" aria-label="予測期間"></select>
+          <select id="tvModel" aria-label="予測モデル"><option value="ADOPTED">主役</option><option value="CURRENT">CURRENT</option><option value="GBM">GBM</option><option value="DNN">DNN</option><option value="CLAUDE">Claude</option></select>
+          <label title="保存済みの過去の予測を期限の日に表示"><input type="checkbox" id="tvPast"> 過去の予測</label>
+        </div>
+        <div class="tv-group" role="group" aria-label="価格軸">
+          <button type="button" data-scale="0" class="active" title="通常">通常</button><button type="button" data-scale="1" title="対数">対数</button><button type="button" data-scale="2" title="%表示">%</button>
+        </div>
+        <span class="tv-spacer"></span>
+        <button type="button" class="icon-btn" id="tvFit" title="全体を表示">⤢</button>
+        <button type="button" class="icon-btn" id="tvShot" title="画像で保存">📷</button>
+        <button type="button" class="icon-btn" id="tvFull" title="全画面">⛶</button>
+      </div>
+      <div class="tv-body">
+        <aside class="tv-draw" aria-label="描画ツール">
+          <button type="button" data-tool="cursor" class="active" title="カーソル">↖</button>
+          <button type="button" data-tool="hline" title="水平線(クリックした価格)">―</button>
+          <button type="button" data-tool="trend" title="トレンドライン(2点をクリック)">╱</button>
+          <button type="button" data-tool="clear" title="この銘柄の描画を消す">🗑</button>
+        </aside>
+        <div class="tv-center">
+          <div id="tvLegend" class="tv-legend"></div>
+          <div id="tvChart" class="tv-chart"></div>
+          <div id="tvHint" class="tv-hint" hidden></div>
+        </div>
+        <aside class="tv-side">
+          <div class="watch">
+            <div class="watch-head"><div class="seg" role="group"><button type="button" data-watch="all" class="active">全銘柄</button><button type="button" data-watch="fav">★お気に入り</button></div>
+              <select id="watchSort" aria-label="並び順"><option value="rank">売買代金順</option><option value="chg">前日比</option><option value="ai">AI 20日予測</option><option value="code">コード</option></select></div>
+            <input id="watchFilter" type="search" placeholder="絞り込み" aria-label="ウォッチリストを絞り込む">
+            <div class="watch-cols"><span>銘柄</span><span>終値</span><span>前日比</span></div>
+            <div id="watchList" class="watch-list"></div>
+          </div>
+          <div id="symCard" class="symcard"></div>
+        </aside>
+      </div>
+      <div class="tv-bottom">
+        <div class="tabs" id="bottomTabs" role="tablist"></div>
+        <div id="bottomBody" class="bottom-body"></div>
+      </div>
+    </section>
+
+    <!-- ランキング・信用 -->
+    <section class="view page" data-view="rank">
+      <div class="page-head"><h1>ランキング・信用残</h1><p>stockAI の対象銘柄の信用倍率・買残/売残とその金額・推定の信用評価損益率を一覧にします。列の見出しを押すと並び替え。</p></div>
+      <div id="rankProgress" class="progress" hidden><i></i><span></span></div>
+      <div id="rankAgg"></div>
+      <div class="filters"><input id="rankFilter" type="search" placeholder="コード・名前で絞り込み"><select id="rankIndustry"><option value="">すべての業種</option></select><select id="rankMethod" title="評価損益率の推定方法"><option value="fifo6m">推定法: 先入れ先出し+6か月期日</option><option value="avg">推定法: 移動平均</option></select><label><input type="checkbox" id="rankNoWarm" checked> 履歴が半年未満の銘柄の損益率を除く</label><span id="rankCount" class="muted"></span></div>
+      <div class="table-wrap tall"><table class="grid sortable" id="rankTable"></table></div>
+      <p class="foot">金額 = 残高 × 申込日の終値。評価損益率は個別銘柄では公表されていないため、残高の増減と期間 VWAP から建玉の取得コストを追跡した<b>推定値</b>です(計算方法は「使い方」)。</p>
+    </section>
+
+    <!-- マクロ・貿易 -->
+    <section class="view page" data-view="macro">
+      <div class="page-head"><h1>マクロ・貿易統計</h1><p id="macroSub">stockAI(Future Sight)が集めた貿易統計・経済指標・市況。</p></div>
+      <div class="tabs" id="macroTabs" role="tablist"></div>
+      <div id="macroBody"></div>
+    </section>
+
+    <!-- IRBANK 保存 -->
+    <section class="view page" data-view="archive">
+      <div class="page-head"><h1>IRBANK 保存データ</h1><p>IRBANK の個別銘柄ページ(信用残・空売り・貸借など)を GitHub Actions で取得し、同じパスワードで暗号化してこのリポジトリに保存したもの。</p></div>
+      <div id="archiveBody"></div>
+    </section>
+
+    <!-- 使い方 -->
+    <section class="view page" data-view="about">
+      <div class="page-head"><h1>使い方・計算方法</h1></div>
+      <div class="prose" id="aboutBody">
+        <h2>データの出どころ</h2>
+        <ul>
+          <li>株価・AI予測・株探/IRBANK の企業データ・信用残・貿易統計: <b>stockAI(Future Sight)</b> が公開している暗号化データを、このページがブラウザ内で復号して表示します。Future Sight と同じパスワードで開きます。</li>
+          <li>IRBANK 保存データ: このリポジトリの GitHub Actions(<code>.github/workflows/irbank-archive.yml</code>)が取得したものです。</li>
+          <li>チャート描画: TradingView の <a href="https://github.com/tradingview/lightweight-charts" target="_blank" rel="noopener">Lightweight Charts™</a>(Apache-2.0)。</li>
+        </ul>
+        <h2>チャートの操作</h2>
+        <ul>
+          <li>ドラッグ=横移動、ホイール/ピンチ=拡大縮小、価格軸のドラッグ=縦の伸縮、ダブルクリック=リセット。</li>
+          <li>左の ― で水平線、╱ で2点のトレンドライン。描画は銘柄ごとにこの端末に保存されます。</li>
+          <li>「サブチャート」で RSI・MACD・ストキャスティクスに加え、信用買残/売残・信用倍率・推定評価損益率・残高金額を下段に出せます。</li>
+          <li>AI予測: stockAI の予測(期間 VWAP の予測値)を最終日から期限の日まで点線で、68%・90% の帯を細線で描きます。期限の日付は土日だけを除いた概算です。</li>
+        </ul>
+        <h2>信用残の金額と推定評価損益率</h2>
+        <p>信用評価損益率は「信用で買った(売った)建玉が、いまの株価でどれだけ含み損益を抱えているか」を表す値で、市場全体の値しか公表されていません。そこで、個別銘柄の申込日ごとの残高から次のように推定します。</p>
+        <ol>
+          <li><b>金額</b>: 買残金額 = 買残(株) × 申込日の終値、売残金額も同様。</li>
+          <li><b>取得コスト</b>: 前回の申込日から残高が増えた分は、その期間の VWAP(典型価格を出来高で加重)で新しく建ったとみなして積み上げます。</li>
+          <li><b>減った分</b>: 既定は先入れ先出し(古い建玉から返済)。制度信用の期日 6 か月(182日)を過ぎた建玉は、期日の終値で乗り換えたとみなして単価を置き直します。もう一つの方法(移動平均法)は、減った割合だけコストを比例で減らします。</li>
+          <li><b>評価損益率</b>: 買い方 = 買残金額 ÷ 取得コスト − 1、売り方 = 1 − 売残金額 ÷ 取得コスト。</li>
+        </ol>
+        <p>最初の観測日は「その日の終値で建てた」と置くので、履歴の最初の約半年は 0% 寄りに出ます(表では薄く表示)。株式分割は、分割日の前後の残高の跳びから信用残が未調整かを自動判定して、金額が連続するように揃えます。一般信用・貸借の区別、現引き・現渡しは残高からは分からないため、あくまで目安です。</p>
+        <p>全銘柄合計の推定損益率は、各銘柄の金額とコストを足し合わせてから割ったもの(金額加重)です。</p>
+        <h2>IRBANK の保存</h2>
+        <p>GitHub の Actions タブで <b>IRBANK archive</b> を手動実行すると、Future Sight の対象銘柄について IRBANK の個別ページを取得します。途中で止まっても、次の実行は未取得の銘柄から続けます。リポジトリの Secrets に <code>FS_PAGES_PASSWORD</code>(このページと同じパスワード)が必要です。</p>
+        <p class="muted">表示している数値は情報提供のためのもので、投資助言ではありません。</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="assets/vendor/lightweight-charts.standalone.production.js"></script>
+  <script src="assets/js/credit.js"></script>
+  <script src="assets/js/data.js"></script>
+  <script src="assets/js/indicators.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>
