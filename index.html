@@ -6,8 +6,9 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Stock Rank</title>
   <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
-  <link rel="stylesheet" href="assets/css/app.css">
+  <link rel="stylesheet" href="assets/css/app.css?v=4c3c16e829">
   <!-- テーマは Future Sight と同じ保存先(同じ github.io なら両方に効く)。読み込み前に当てて、ちらつきを防ぐ -->
+  <script>try { if (localStorage.getItem("stockrank-sidebar") === "closed") document.documentElement.classList.add("sidebar-closed"); } catch { /* */ }</script>
   <script>try { const t = localStorage.getItem("future-sight-theme"); if (["light", "dark", "prototype", "earth"].includes(t)) document.documentElement.dataset.fsTheme = t; } catch { /* */ }</script>
 </head>
 <body>
@@ -20,6 +21,7 @@
         <span class="brand-copy"><strong>Stock Rank</strong><small>Market Data × Future Sight</small></span>
         <span class="prototype-badge">DATA</span>
       </a>
+      <button type="button" class="sidebar-close" id="sidebarClose" title="サイドバーを閉じる(Ctrl+B)" aria-label="サイドバーを閉じる"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 4v16" stroke="currentColor" stroke-width="1.6"/></svg></button>
       <nav class="nav-list">
         <a class="nav-item" href="#chart" data-nav="chart"><span class="nav-icon">⟋</span><span>チャート</span></a>
         <a class="nav-item" href="#rank" data-nav="rank"><span class="nav-icon">☷</span><span>ランキング・信用</span></a>
@@ -37,6 +39,7 @@
     <div class="main-area">
       <header class="topbar">
         <button class="mobile-menu" id="mobileMenu" type="button" aria-label="メニューを開く">☰</button>
+        <button class="sidebar-open" id="sidebarOpen" type="button" title="サイドバーを開く(Ctrl+B)" aria-label="サイドバーを開く"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 4v16" stroke="currentColor" stroke-width="1.6"/></svg></button>
         <label class="global-search">
           <span aria-hidden="true">⌕</span>
           <input id="symSearch" type="search" autocomplete="off" placeholder="銘柄・指数に移動(コード / 社名 / 日経平均…)" aria-label="銘柄・指数を検索して移動">
@@ -51,49 +54,61 @@
 
   <main id="app" class="page-stack">
     <!-- チャート(TradingView 型) -->
-    <section class="view" data-view="chart">
-      <div class="tv-toolbar">
-        <button type="button" id="tvSymbol" class="tv-sym" title="銘柄を検索">—</button>
-        <div class="tv-group" role="group" aria-label="足">
-          <button type="button" data-interval="1d" class="active">日足</button><button type="button" data-interval="1w">週足</button><button type="button" data-interval="1mo">月足</button>
-        </div>
-        <select id="tvType" aria-label="チャートの種類"><option value="candle">ローソク足</option><option value="ha">平均足</option><option value="bar">バー</option><option value="line">ライン</option><option value="area">エリア</option></select>
-        <details class="tv-menu"><summary>インジケーター</summary><div class="tv-menu-body" id="tvIndMenu"></div></details>
-        <details class="tv-menu"><summary>サブチャート</summary><div class="tv-menu-body" id="tvPaneMenu"></div></details>
-        <div class="tv-group" role="group" aria-label="価格軸">
-          <button type="button" data-scale="0" class="active" title="通常">通常</button><button type="button" data-scale="1" title="対数">対数</button><button type="button" data-scale="2" title="%表示">%</button>
-        </div>
+    <section class="view tvview" data-view="chart">
+      <div class="tv-top">
+        <button type="button" id="tvSymbol" class="tv-sym" title="銘柄・指数を検索(チャート上で文字を打っても開きます)"><span class="tv-sym-ic">⌕</span><b>—</b></button>
+        <button type="button" id="tvCompare" class="tv-ibtn" title="比較(銘柄・指数を重ねる)">＋</button>
+        <span class="tv-sep"></span>
+        <div class="tv-group" role="group" aria-label="足"><button type="button" data-interval="1d" class="active" title="日足">日</button><button type="button" data-interval="1w" title="週足">週</button><button type="button" data-interval="1mo" title="月足">月</button></div>
+        <span class="tv-sep"></span>
+        <div class="tv-dd"><button type="button" id="tvTypeBtn" class="tv-tbtn" title="チャートの種類" aria-haspopup="true"></button><div class="tv-ddmenu" id="tvTypeMenu" hidden></div></div>
+        <span class="tv-sep"></span>
+        <button type="button" id="tvIndBtn" class="tv-tbtn" title="インジケーター・サブチャート(/ でも開けます)"><i class="fx">ƒx</i> インジケーター</button>
+        <span class="tv-sep"></span>
+        <button type="button" id="tvUndo" class="tv-ibtn" title="元に戻す(Ctrl+Z)">↶</button><button type="button" id="tvRedo" class="tv-ibtn" title="やり直す(Ctrl+Y)">↷</button>
         <span class="tv-spacer"></span>
-        <button type="button" class="icon-btn" id="tvFit" title="全体を表示">⤢</button>
-        <button type="button" class="icon-btn" id="tvShot" title="画像で保存">📷</button>
-        <button type="button" class="icon-btn" id="tvFull" title="全画面">⛶</button>
+        <button type="button" class="tv-ibtn" id="tvFit" title="全体を表示(Alt+R でリセット)">⤢</button>
+        <button type="button" class="tv-ibtn" id="tvShot" title="画像で保存">📷</button>
+        <button type="button" class="tv-ibtn" id="tvFull" title="全画面">⛶</button>
+        <a class="tv-ibtn" href="#settings" title="設定">⚙</a>
       </div>
-      <div class="tv-body">
-        <aside class="tv-draw" aria-label="描画ツール">
-          <button type="button" data-tool="cursor" class="active" title="カーソル">↖</button>
-          <button type="button" data-tool="hline" title="水平線(クリックした価格)">―</button>
-          <button type="button" data-tool="trend" title="トレンドライン(2点をクリック)">╱</button>
-          <button type="button" data-tool="clear" title="この銘柄の描画を消す">🗑</button>
-        </aside>
+      <div class="tv-main">
+        <aside class="tv-draw" aria-label="描画ツール"><button type="button" data-tool="cursor" title="カーソル(Esc)"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M9 6v15l4-4 3 6 2-1-3-6h6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button><span class="tv-dsep"></span><button type="button" data-tool="trend" title="トレンドライン(Alt+T)"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M6 22L22 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="22" r="2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="22" cy="6" r="2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><button type="button" data-tool="ray" title="水平レイ(Alt+J)"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M8 14h16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="6" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><button type="button" data-tool="hline" title="水平線(Alt+H)"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3 14h22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><button type="button" data-tool="vline" title="垂直線(Alt+V)"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M14 3v22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="14" cy="14" r="2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="tv-dsep"></span><button type="button" data-tool="fib" title="フィボナッチ・リトレースメント(Alt+F)"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M5 7h18M5 11h18M5 15h18M5 21h18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><button type="button" data-tool="rect" title="長方形(Alt+R)"><svg viewBox="0 0 28 28" aria-hidden="true"><rect x="6" y="8" width="16" height="12" rx="1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><button type="button" data-tool="measure" title="計測(Shift+クリックでも)"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M6 22L22 6M6 16v6h6M22 12V6h-6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><button type="button" data-tool="text" title="テキスト"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M8 7h12M14 7v15M11 22h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="tv-dsep"></span><button type="button" data-toggle="magnet" title="マグネット(OHLC に吸着)"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M8 6v8a6 6 0 0012 0V6h-4v8a2 2 0 01-4 0V6z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button><button type="button" data-toggle="hide" title="描画を隠す/表示"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M3 14s4-7 11-7 11 7 11 7-4 7-11 7S3 14 3 14z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="14" cy="14" r="3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><button type="button" data-tool="clear" title="この銘柄の描画を全部消す"><svg viewBox="0 0 28 28" aria-hidden="true"><path d="M7 9h14M11 9V6h6v3M9 9l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button></aside>
         <div class="tv-center">
-          <div id="tvLegend" class="tv-legend"></div>
-          <div id="tvChart" class="tv-chart"></div>
-          <div id="tvHint" class="tv-hint" hidden></div>
+          <div class="tv-chartwrap">
+            <div id="tvLegend" class="tv-legend"></div>
+            <div id="tvPaneLegends"></div>
+            <div id="tvChart" class="tv-chart"></div>
+            <div id="tvHint" class="tv-hint" hidden></div>
+          </div>
+          <div class="tv-rangebar">
+            <div class="tv-ranges" role="group" aria-label="期間"><button type="button" data-range="1M">1か月</button><button type="button" data-range="3M">3か月</button><button type="button" data-range="6M">6か月</button><button type="button" data-range="YTD">年初来</button><button type="button" data-range="1Y">1年</button><button type="button" data-range="5Y">5年</button><button type="button" data-range="ALL">全期間</button></div>
+            <label class="tv-goto" title="日付へ移動">📅<input type="date" id="tvGoto" aria-label="日付へ移動"></label>
+            <span class="tv-spacer"></span>
+            <span id="tvClock" class="tv-clock"></span>
+            <span class="tv-sep"></span>
+            <div class="tv-scales" role="group" aria-label="価格軸"><button type="button" data-scale="2" title="パーセント">%</button><button type="button" data-scale="1" title="対数">log</button><button type="button" data-scale="0" title="自動(通常)">auto</button></div>
+          </div>
+          <div class="tv-bottom" id="tvBottom">
+            <div class="tv-bottom-resize" id="tvBottomResize" title="ドラッグで高さを変える"></div>
+            <div class="tv-bottom-head"><div class="tabs" id="bottomTabs" role="tablist"></div><button type="button" id="tvBottomToggle" class="tv-ibtn" title="下のパネルを開く/閉じる">▾</button></div>
+            <div id="bottomBody" class="bottom-body"></div>
+          </div>
         </div>
-        <aside class="tv-side">
+        <aside class="tv-side" id="tvSide">
           <div class="watch">
-            <div class="watch-head"><div class="seg" role="group"><button type="button" data-watch="all" class="active">全銘柄</button><button type="button" data-watch="idx">指数</button><button type="button" data-watch="fav">★</button></div>
-              <select id="watchSort" aria-label="並び順"><option value="rank">売買代金順</option><option value="chg">前日比</option><option value="code">コード</option></select></div>
-            <input id="watchFilter" type="search" placeholder="絞り込み" aria-label="ウォッチリストを絞り込む">
+            <div class="watch-head"><b class="side-title">ウォッチリスト</b><div class="seg" role="group"><button type="button" data-watch="all" class="active">全銘柄</button><button type="button" data-watch="idx">指数</button><button type="button" data-watch="fav">★</button></div></div>
+            <div class="watch-tools"><input id="watchFilter" type="search" placeholder="絞り込み" aria-label="ウォッチリストを絞り込む"><select id="watchSort" aria-label="並び順"><option value="rank">売買代金順</option><option value="chg">前日比</option><option value="code">コード</option></select></div>
             <div class="watch-cols"><span>銘柄</span><span>終値</span><span>前日比</span></div>
             <div id="watchList" class="watch-list"></div>
           </div>
           <div id="symCard" class="symcard"></div>
         </aside>
-      </div>
-      <div class="tv-bottom">
-        <div class="tabs" id="bottomTabs" role="tablist"></div>
-        <div id="bottomBody" class="bottom-body"></div>
+        <nav class="tv-rail" aria-label="右のパネル">
+          <button type="button" data-rail="watch" title="ウォッチリストと詳細を開く/閉じる"><svg viewBox="0 0 28 28"><path d="M6 8h16M6 14h16M6 20h10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+          <button type="button" data-rail="detail" title="銘柄の詳細へ"><svg viewBox="0 0 28 28"><circle cx="14" cy="14" r="9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M14 13v6M14 9.5v.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+          <button type="button" data-rail="bottom" title="下のパネル(企業データ)を開く/閉じる"><svg viewBox="0 0 28 28"><rect x="5" y="6" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M5 16h18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
+        </nav>
       </div>
     </section>
 
@@ -168,10 +183,18 @@
   </div>
 
   <div id="toast" class="toast" hidden></div>
-  <script src="assets/vendor/lightweight-charts.standalone.production.js"></script>
-  <script src="assets/js/credit.js"></script>
-  <script src="assets/js/data.js"></script>
-  <script src="assets/js/indicators.js"></script>
-  <script src="assets/js/app.js"></script>
+  <div class="modal" id="symModal" hidden><div class="modal-box" role="dialog" aria-label="銘柄・指数を検索"><header><b id="symModalTitle">銘柄・指数を検索</b><button type="button" class="tv-ibtn" data-close>✕</button></header>
+    <input id="symModalInput" type="search" placeholder="コード・社名・指数名(例: 7203 / トヨタ / 日経)" autocomplete="off">
+    <div class="modal-filters seg" role="group"><button type="button" data-symkind="all" class="active">すべて</button><button type="button" data-symkind="stock">株式</button><button type="button" data-symkind="index">指数</button></div>
+    <div id="symModalList" class="modal-list"></div></div></div>
+  <div class="modal" id="indModal" hidden><div class="modal-box" role="dialog" aria-label="インジケーター"><header><b>インジケーター・サブチャート</b><button type="button" class="tv-ibtn" data-close>✕</button></header>
+    <input id="indModalInput" type="search" placeholder="検索(例: 移動平均 / 信用 / RSI)" autocomplete="off">
+    <div id="indModalList" class="modal-list"></div></div></div>
+  <script src="assets/vendor/lightweight-charts.standalone.production.js?v=3333da377a"></script>
+  <script src="assets/js/credit.js?v=051eb7d0b6"></script>
+  <script src="assets/js/data.js?v=63fddb8d36"></script>
+  <script src="assets/js/indicators.js?v=ab227dd66f"></script>
+  <script src="assets/js/drawings.js?v=c93ee793f4"></script>
+  <script src="assets/js/app.js?v=a98a5f8d28"></script>
 </body>
 </html>

@@ -59,7 +59,7 @@
   const csvLine = (cells) => cells.map((c) => { const s = String(c ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(",");
 
   // ---------- 状態 ----------
-  const DEFAULTS = { interval: "1d", type: "candle", ind: ["ma5", "ma25", "ma75", "vol", "earnings"], panes: ["credit", "pnl"], scale: 0, bottomTab: "credit", creditMethod: "fifo6m", watch: "all", watchSort: "rank", macroTab: "trade" };
+  const DEFAULTS = { interval: "1d", type: "candle", ind: ["ma5", "ma25", "ma75", "vol", "earnings"], panes: ["credit", "pnl"], hiddenInd: [], sideOpen: true, bottomOpen: true, bottomH: 300, magnet: false, hideDrawings: false, scale: 0, bottomTab: "credit", creditMethod: "fifo6m", watch: "all", watchSort: "rank", macroTab: "trade" };
   const S = {
     dash: null, preds: [], byCode: new Map(), catalog: {}, code: null, view: "chart",
     set: { ...DEFAULTS, ...LS.get("stockrank-settings", {}) },
@@ -111,7 +111,7 @@
     SRData.fs("evidence").then((x) => { S.evidence = x; if (S.set.bottomTab === "profile") renderBottom(); }).catch(() => { S.evidence = null; });
     $("#asOf").textContent = S.dash.asOf ? `${String(S.dash.asOf).slice(0, 16).replace("T", " ")} 時点のデータ` : "";
     document.body.classList.remove("loading");
-    buildToolbar(); bindChartUi(); bindSearch(); bindWatch(); renderWatch();
+    buildToolbar(); bindChartUi(); bindLegend(); bindModals(); bindSearch(); bindWatch(); bindSidebar(); renderWatch();
     window.addEventListener("hashchange", route);
     route();
   }
@@ -160,16 +160,27 @@
     });
     box.addEventListener("click", (e) => { const b = e.target.closest("[data-code]"); if (!b) return; goChart(b.dataset.code); input.value = ""; box.hidden = true; });
     document.addEventListener("click", (e) => { if (!e.target.closest(".global-search")) box.hidden = true; });
-    $("#tvSymbol").addEventListener("click", () => { input.focus(); });
     // TradingView のように、チャート上で英数字を打つと検索欄へ
     document.addEventListener("keydown", (e) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || /input|select|textarea/i.test(document.activeElement?.tagName || "")) return;
-      if (e.key === "/") { e.preventDefault(); input.focus(); return; }
-      if (S.view === "chart" && /^[0-9a-zA-Z]$/.test(e.key)) input.focus();
+      if (S.view === "chart" || e.ctrlKey || e.metaKey || e.altKey || /input|select|textarea/i.test(document.activeElement?.tagName || "")) return;
+      if (e.key === "/") { e.preventDefault(); input.focus(); }
     });
     // スマホ: サイドバーを引き出す
     $("#mobileMenu").addEventListener("click", (e) => { e.stopPropagation(); document.body.classList.toggle("menu-open"); });
     document.addEventListener("click", (e) => { if (document.body.classList.contains("menu-open") && !e.target.closest(".sidebar")) document.body.classList.remove("menu-open"); });
+  }
+
+  // ---------- サイドバー(Claude のように閉じる/開く。Ctrl+B) ----------
+  function setSidebar(open) {
+    document.documentElement.classList.toggle("sidebar-closed", !open);
+    try { localStorage.setItem("stockrank-sidebar", open ? "open" : "closed"); } catch { /* */ }
+    // チャートの幅が変わるので、アニメーションの後に合わせ直す(autoSize が追従するが、凡例の位置も更新)
+    setTimeout(() => requestAnimationFrame(renderPaneLegends), 260);
+  }
+  function bindSidebar() {
+    $("#sidebarClose").addEventListener("click", () => setSidebar(false));
+    $("#sidebarOpen").addEventListener("click", () => setSidebar(true));
+    document.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "b") { e.preventDefault(); setSidebar(document.documentElement.classList.contains("sidebar-closed")); } });
   }
 
   // テーマ(Future Sight と同じ 4 種・同じ保存先)
@@ -195,7 +206,7 @@
       <section class="panel settings"><h3>チャートの既定</h3>
         <div class="set-grid">
           <label>足<select data-set="interval">${opt([["1d", "日足"], ["1w", "週足"], ["1mo", "月足"]], S.set.interval)}</select></label>
-          <label>チャートの種類<select data-set="type">${opt([["candle", "ローソク足"], ["ha", "平均足"], ["bar", "バー"], ["line", "ライン"], ["area", "エリア"]], S.set.type)}</select></label>
+          <label>チャートの種類<select data-set="type">${opt(CHART_TYPES.map(([k, l]) => [k, l]), S.set.type)}</select></label>
           <label>価格軸<select data-set="scale">${opt([[0, "通常"], [1, "対数"], [2, "%"]], S.set.scale)}</select></label>
           <label>ウォッチリストの並び順<select data-set="watchSort">${opt([["rank", "売買代金順"], ["chg", "前日比"], ["code", "コード"]], S.set.watchSort)}</select></label>
         </div>
@@ -309,7 +320,8 @@
     if (S.code !== code) return; // 読み込み中に別銘柄へ移った
     const dec = SRData.decodeChart(doc);
     S.cur = { code, row, ...dec, detail, archives: { kabutan, irbank } };
-    S.drawings = LS.get(`stockrank-draw-${code}`, { h: [], t: [] });
+    S.compare = S.compare.filter((c) => c.code !== code);
+    S.drawings = loadDrawings(code); undoStack = []; redoStack = [];
     S.pending = null;
     computeEst(S.cur);
     renderChart(false);
@@ -349,7 +361,8 @@
     if (S.code !== code) return;
     const est = { method: "", unadjusted: false, rows: creditRowsOnly(mc.rows), warmupEnd: null };
     S.cur = { code, isIndex: true, idx: p, row: { name: p.name, market: p.kind, close: p.stats?.last, change1d: p.stats?.chg1d }, daily, weekly: [], splits: [], detail: null, archives: {}, credit: mc.rows, creditLabel: mc.label, creditAgg: mc.agg, est };
-    S.drawings = LS.get(`stockrank-draw-${code}`, { h: [], t: [] });
+    S.compare = S.compare.filter((c) => c.code !== code);
+    S.drawings = loadDrawings(code); undoStack = []; redoStack = [];
     S.pending = null;
     renderChart(false); renderSymCard(); renderBottom();
   }
@@ -357,7 +370,7 @@
   // =====================================================================
   // チャート(Lightweight Charts)
   // =====================================================================
-  let chart = null; let mainSeries = null; let overlay = []; let drawingObjs = []; let paneSeries = [];
+  let chart = null; let mainSeries = null; let overlay = []; let paneSeries = [];
   function chartTheme() {
     return {
       layout: { background: { type: "solid", color: css("--tv-bg") }, textColor: css("--tv-text"), fontFamily: "-apple-system, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', sans-serif", fontSize: 11, panes: { separatorColor: css("--tv-border"), separatorHoverColor: css("--tv-hover"), enableResize: true } },
@@ -370,11 +383,12 @@
     if (chart) return chart;
     chart = LW.createChart($("#tvChart"), {
       autoSize: true, ...chartTheme(),
-      crosshair: { ...chartTheme().crosshair, mode: LW.CrosshairMode.Normal },
+      crosshair: { ...chartTheme().crosshair, mode: S.set.magnet ? LW.CrosshairMode.Magnet : LW.CrosshairMode.Normal },
       timeScale: { ...chartTheme().timeScale, rightOffset: 6, barSpacing: 7, minBarSpacing: 0.5 },
       localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" },
     });
     chart.subscribeCrosshairMove(onCrosshair);
+    new ResizeObserver(() => requestAnimationFrame(renderPaneLegends)).observe($("#tvChart"));
     chart.subscribeClick(onChartClick);
     return chart;
   }
@@ -385,43 +399,195 @@
 
   const IND_MENU = [["ma5", "移動平均 5"], ["ma25", "移動平均 25"], ["ma75", "移動平均 75"], ["ma200", "移動平均 200"], ["bb", "ボリンジャーバンド 20, 2σ"], ["ichimoku", "一目均衡表"], ["vol", "出来高"], ["avgcost", "信用買い方の推定平均取得単価"], ["earnings", "決算発表日(「決」印)"]];
   const PANE_MENU = [["credit", "信用残(買残・売残)"], ["ratio", "信用倍率"], ["pnl", "推定 信用評価損益率"], ["amount", "信用残の金額"], ["rsi", "RSI 14"], ["macd", "MACD 12, 26, 9"], ["stoch", "ストキャスティクス 14, 3"]];
-  const IND_COLORS = { ma5: "#2962ff", ma25: "#ff9800", ma75: "#ab47bc", ma200: "#26a69a" };
+  const IND_COLORS = { ma5: "#2962ff", ma25: "#ff9800", ma75: "#ab47bc", ma200: "#26a69a", bb: "#2962ff", ichimoku: "#e91e63", vol: "#26a69a", avgcost: "#ef5350", earnings: "#f7a600" };
+  const COMPARE_COLORS = ["#ff9800", "#ab47bc", "#00bcd4", "#e91e63"];
+  const CHART_TYPES = [["candle", "ローソク足", "▮"], ["hollow", "中空ローソク足", "▯"], ["ha", "平均足", "▮"], ["bar", "バー", "⫶"], ["line", "ライン", "╱"], ["area", "エリア", "◺"], ["baseline", "ベースライン", "⫠"]];
+  let compareSeries = []; let drawLayer = null;
+  S.compare = [];
 
+  // ---------- ツールバー ----------
   function buildToolbar() {
-    $("#tvIndMenu").innerHTML = IND_MENU.map(([k, l]) => `<label><input type="checkbox" data-ind="${k}" ${S.set.ind.includes(k) ? "checked" : ""}> ${l}</label>`).join("");
-    $("#tvPaneMenu").innerHTML = PANE_MENU.map(([k, l]) => `<label><input type="checkbox" data-pane="${k}" ${S.set.panes.includes(k) ? "checked" : ""}> ${l}</label>`).join("");
-    $("#tvType").value = S.set.type;
+    const menu = $("#tvTypeMenu");
+    menu.innerHTML = CHART_TYPES.map(([k, l, ic]) => `<button type="button" data-type="${k}"><i>${ic}</i>${l}</button>`).join("");
+    syncToolbar();
+  }
+  function syncToolbar() {
+    const t = CHART_TYPES.find(([k]) => k === S.set.type) || CHART_TYPES[0];
+    $("#tvTypeBtn").innerHTML = `<i>${t[2]}</i> ${t[1]} ▾`;
+    $$("[data-type]").forEach((b) => b.classList.toggle("active", b.dataset.type === S.set.type));
     $$("[data-interval]").forEach((b) => b.classList.toggle("active", b.dataset.interval === S.set.interval));
-    $$("[data-scale]").forEach((b) => b.classList.toggle("active", Number(b.dataset.scale) === S.set.scale));
+    $$("[data-scale]").forEach((b) => b.classList.toggle("active", Number(b.dataset.scale) === (S.compare.length ? 2 : S.set.scale)));
+    $$("[data-toggle='magnet']").forEach((b) => b.classList.toggle("active", !!S.set.magnet));
+    $$("[data-toggle='hide']").forEach((b) => b.classList.toggle("active", !!S.set.hideDrawings));
+    $("#tvUndo").disabled = !undoStack.length; $("#tvRedo").disabled = !redoStack.length;
+    const side = S.set.sideOpen !== false, bottom = S.set.bottomOpen !== false;
+    $(".tvview")?.classList.toggle("side-closed", !side); $(".tvview")?.classList.toggle("bottom-closed", !bottom);
+    $$("[data-rail='watch']").forEach((b) => b.classList.toggle("active", side)); $$("[data-rail='bottom']").forEach((b) => b.classList.toggle("active", bottom));
+    $("#tvBottomToggle").textContent = bottom ? "▾" : "▴";
+    $(".tvview")?.style.setProperty("--bottom-h", `${S.set.bottomH || 300}px`);
   }
   function bindChartUi() {
-    const rerender = () => { saveSettings(); if (S.cur) renderChart(true); };
-    $$("[data-interval]").forEach((b) => b.addEventListener("click", () => { S.set.interval = b.dataset.interval; $$("[data-interval]").forEach((x) => x.classList.toggle("active", x === b)); saveSettings(); if (S.cur) renderChart(false); }));
-    $$("[data-scale]").forEach((b) => b.addEventListener("click", () => { S.set.scale = Number(b.dataset.scale); $$("[data-scale]").forEach((x) => x.classList.toggle("active", x === b)); saveSettings(); chart?.priceScale("right", 0).applyOptions({ mode: S.set.scale }); }));
-    $("#tvType").addEventListener("change", (e) => { S.set.type = e.target.value; rerender(); });
-    $("#tvIndMenu").addEventListener("change", (e) => { const k = e.target.dataset.ind; if (!k) return; S.set.ind = e.target.checked ? [...new Set([...S.set.ind, k])] : S.set.ind.filter((x) => x !== k); rerender(); });
-    $("#tvPaneMenu").addEventListener("change", (e) => { const k = e.target.dataset.pane; if (!k) return; S.set.panes = e.target.checked ? PANE_MENU.map(([x]) => x).filter((x) => x === k || S.set.panes.includes(x)) : S.set.panes.filter((x) => x !== k); rerender(); });
+    const rerender = (keep = true) => { saveSettings(); if (S.cur) renderChart(keep); };
+    $$("[data-interval]").forEach((b) => b.addEventListener("click", () => { S.set.interval = b.dataset.interval; rerender(false); }));
+    $$("[data-scale]").forEach((b) => b.addEventListener("click", () => { if (S.compare.length) { toast("比較中は % 表示です(比較を外すと戻ります)"); return; } S.set.scale = Number(b.dataset.scale); saveSettings(); chart?.priceScale("right", 0).applyOptions({ mode: S.set.scale }); syncToolbar(); }));
+    // 種類のドロップダウン
+    const menu = $("#tvTypeMenu");
+    $("#tvTypeBtn").addEventListener("click", (e) => { e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); menu.style.left = `${r.left}px`; menu.style.top = `${r.bottom}px`; menu.hidden = !menu.hidden; });
+    menu.addEventListener("click", (e) => { const b = e.target.closest("[data-type]"); if (!b) return; S.set.type = b.dataset.type; menu.hidden = true; rerender(); });
+    document.addEventListener("click", (e) => { if (!e.target.closest(".tv-dd")) menu.hidden = true; });
+    $("#tvIndBtn").addEventListener("click", openIndModal);
+    $("#tvSymbol").addEventListener("click", () => openSymModal("go"));
+    $("#tvCompare").addEventListener("click", () => openSymModal("compare"));
+    $("#tvUndo").addEventListener("click", undo); $("#tvRedo").addEventListener("click", redo);
     $("#tvFit").addEventListener("click", () => chart?.timeScale().fitContent());
-    $("#tvShot").addEventListener("click", () => { if (!chart) return; const c = chart.takeScreenshot(true); c.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `${S.code}_${S.set.interval}.png`; a.click(); }); });
-    $("#tvFull").addEventListener("click", () => { const el = $('[data-view="chart"]'); if (document.fullscreenElement) document.exitFullscreen(); else el.requestFullscreen?.().catch(() => el.classList.toggle("pseudo-full")); });
+    $("#tvShot").addEventListener("click", () => { if (!chart) return; const c = chart.takeScreenshot(true); c.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `${S.code.replace("@", "")}_${S.set.interval}.png`; a.click(); }); });
+    $("#tvFull").addEventListener("click", () => { const el = $(".tvview"); if (document.fullscreenElement) document.exitFullscreen(); else el.requestFullscreen?.().catch(() => el.classList.toggle("pseudo-full")); });
+    // 描画ツール
     $$("[data-tool]").forEach((b) => b.addEventListener("click", () => {
-      if (b.dataset.tool === "clear") { S.drawings = { h: [], t: [] }; LS.set(`stockrank-draw-${S.code}`, S.drawings); S.pending = null; renderDrawings(); setTool("cursor"); toast("この銘柄の描画を消しました"); return; }
-      setTool(b.dataset.tool);
+      if (b.dataset.tool === "clear") { if (!S.drawings.length) return; pushUndo(); S.drawings.length = 0; saveDrawings(); setTool("cursor"); toast("この銘柄の描画を消しました(Ctrl+Z で戻せます)"); return; }
+      setTool(S.tool === b.dataset.tool && b.dataset.tool !== "cursor" ? "cursor" : b.dataset.tool);
     }));
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && S.tool !== "cursor") setTool("cursor"); });
-    // 開いたメニューは外側のクリックで閉じる
-    document.addEventListener("click", (e) => { $$(".tv-menu[open]").forEach((d) => { if (!d.contains(e.target)) d.open = false; }); });
-  }
-  function setTool(t) {
-    S.tool = t; S.pending = null;
-    $$("[data-tool]").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
-    $("#tvChart").classList.toggle("drawing", t !== "cursor");
-    const hint = $("#tvHint"); hint.hidden = t === "cursor";
-    hint.textContent = t === "hline" ? "水平線: 価格をクリック(Esc で中止)" : t === "trend" ? "トレンドライン: 始点をクリック(Esc で中止)" : "";
+    $$("[data-toggle]").forEach((b) => b.addEventListener("click", () => {
+      if (b.dataset.toggle === "magnet") { S.set.magnet = !S.set.magnet; chart?.applyOptions({ crosshair: { mode: S.set.magnet ? LW.CrosshairMode.Magnet : LW.CrosshairMode.Normal } }); }
+      if (b.dataset.toggle === "hide") { S.set.hideDrawings = !S.set.hideDrawings; if (drawLayer) { drawLayer.hidden = S.set.hideDrawings; drawLayer.update(); } }
+      saveSettings(); syncToolbar();
+    }));
+    // 期間・日付へ移動
+    $$("[data-range]").forEach((b) => b.addEventListener("click", () => setRange(b.dataset.range)));
+    $("#tvGoto").addEventListener("change", (e) => goToDate(e.target.value));
+    // 右のパネル・下のパネル
+    $$("[data-rail]").forEach((b) => b.addEventListener("click", () => {
+      const k = b.dataset.rail;
+      if (k === "watch") S.set.sideOpen = S.set.sideOpen === false;
+      if (k === "detail") { S.set.sideOpen = true; requestAnimationFrame(() => $("#symCard")?.scrollIntoView({ block: "start", behavior: "smooth" })); }
+      if (k === "bottom") S.set.bottomOpen = S.set.bottomOpen === false;
+      saveSettings(); syncToolbar();
+    }));
+    $("#tvBottomToggle").addEventListener("click", () => { S.set.bottomOpen = S.set.bottomOpen === false; saveSettings(); syncToolbar(); });
+    // 下のパネルの高さをドラッグで変える
+    const handle = $("#tvBottomResize");
+    handle.addEventListener("pointerdown", (e) => {
+      e.preventDefault(); handle.setPointerCapture(e.pointerId); const y0 = e.clientY, h0 = S.set.bottomOpen === false ? 0 : (S.set.bottomH || 300);
+      const move = (ev) => { const h = Math.max(120, Math.min(window.innerHeight * 0.7, h0 + (y0 - ev.clientY))); S.set.bottomH = Math.round(h); S.set.bottomOpen = true; syncToolbar(); };
+      const up = () => { handle.removeEventListener("pointermove", move); handle.removeEventListener("pointerup", up); saveSettings(); };
+      handle.addEventListener("pointermove", move); handle.addEventListener("pointerup", up);
+    });
+    // 時計(東京)
+    const tick = () => { const c = $("#tvClock"); if (c) c.textContent = `${new Date().toLocaleTimeString("ja-JP", { timeZone: "Asia/Tokyo" })} (UTC+9)`; };
+    tick(); setInterval(tick, 1000);
+    bindChartKeys();
   }
 
+  // ---------- キーボード(TradingView と同じ割り当て) ----------
+  function bindChartKeys() {
+    document.addEventListener("keydown", (e) => {
+      if (S.view !== "chart" || !S.cur) return;
+      const typing = /input|select|textarea/i.test(document.activeElement?.tagName || "");
+      if ($(".modal:not([hidden])")) return;
+      const k = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && k === "z" && !typing) { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+      if ((e.ctrlKey || e.metaKey) && k === "y" && !typing) { e.preventDefault(); redo(); return; }
+      if (typing || e.ctrlKey || e.metaKey) return;
+      if (e.altKey) {
+        const map = { t: "trend", h: "hline", j: "ray", v: "vline", f: "fib", r: null };
+        if (k === "r") { e.preventDefault(); chart?.timeScale().resetTimeScale(); chart?.priceScale("right", 0).applyOptions({ autoScale: true }); renderChart(false); return; }
+        if (map[k]) { e.preventDefault(); setTool(map[k]); }
+        return;
+      }
+      if (e.key === "Escape") { if (S.tool !== "cursor" || S.pending) setTool("cursor"); else if (drawLayer && drawLayer.selected >= 0) { drawLayer.selected = -1; drawLayer.update(); } return; }
+      if ((e.key === "Delete" || e.key === "Backspace") && drawLayer && drawLayer.selected >= 0) { e.preventDefault(); pushUndo(); S.drawings.splice(drawLayer.selected, 1); drawLayer.selected = -1; saveDrawings(); return; }
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); const ts = chart.timeScale(); const r = ts.getVisibleLogicalRange(); if (!r) return; const d = Math.max(1, Math.round((r.to - r.from) / 8)) * (e.key === "ArrowLeft" ? -1 : 1); ts.setVisibleLogicalRange({ from: r.from + d, to: r.to + d }); return; }
+      if (e.key === "+" || e.key === "-") { const ts = chart.timeScale(); const r = ts.getVisibleLogicalRange(); if (!r) return; const c = r.to, w = (r.to - r.from) * (e.key === "+" ? 0.8 : 1.25); ts.setVisibleLogicalRange({ from: c - w, to: c }); return; }
+      if (e.key === "/") { e.preventDefault(); openIndModal(); return; }
+      if (/^[0-9a-zA-Z]$/.test(e.key) || /[^\x00-\x7f]/.test(e.key)) { e.preventDefault(); openSymModal("go", e.key); }
+    });
+  }
+
+  // ---------- 期間 ----------
+  function setRange(key) {
+    const bars = S.bars || []; if (!bars.length || !chart) return;
+    if (key === "ALL") { chart.timeScale().fitContent(); return; }
+    const last = bars.at(-1).end; const t = new Date(`${last}T00:00:00Z`);
+    if (key === "YTD") t.setUTCMonth(0, 1); else { const m = { "1M": 1, "3M": 3, "6M": 6, "1Y": 12, "5Y": 60 }[key]; t.setUTCMonth(t.getUTCMonth() - m); }
+    const from = Math.max(0, barIndexAt(bars, t.toISOString().slice(0, 10)));
+    chart.timeScale().setVisibleLogicalRange({ from, to: bars.length - 1 + 4 });
+  }
+  function goToDate(d) {
+    const bars = S.bars || []; if (!d || !bars.length) return;
+    const i = Math.max(0, barIndexAt(bars, d)); const r = chart.timeScale().getVisibleLogicalRange(); const w = r ? r.to - r.from : 120;
+    chart.timeScale().setVisibleLogicalRange({ from: i - w / 2, to: i + w / 2 });
+  }
+
+  // ---------- 描画ツール ----------
+  const TOOL_HINT = { trend: "トレンドライン: 始点をクリック", ray: "水平レイ: 始点をクリック", hline: "水平線: 価格をクリック", vline: "垂直線: 日付をクリック", fib: "フィボナッチ: 高値(または安値)をクリック", rect: "長方形: 角をクリック", measure: "計測: 始点をクリック", text: "テキスト: 置く場所をクリック" };
+  let undoStack = [], redoStack = [];
+  function pushUndo() { undoStack.push(JSON.stringify(S.drawings)); if (undoStack.length > 50) undoStack.shift(); redoStack = []; syncToolbar(); }
+  function undo() { if (!undoStack.length) return; redoStack.push(JSON.stringify(S.drawings)); const prev = JSON.parse(undoStack.pop()); S.drawings.splice(0, S.drawings.length, ...prev); saveDrawings(); }
+  function redo() { if (!redoStack.length) return; undoStack.push(JSON.stringify(S.drawings)); const next = JSON.parse(redoStack.pop()); S.drawings.splice(0, S.drawings.length, ...next); saveDrawings(); }
+  function setTool(t) {
+    S.tool = t; S.pending = null; if (drawLayer) { drawLayer.preview = null; drawLayer.update(); }
+    $$("[data-tool]").forEach((b) => b.classList.toggle("active", b.dataset.tool === t));
+    $("#tvChart").classList.toggle("drawing", t !== "cursor");
+    const hint = $("#tvHint"); hint.hidden = t === "cursor"; hint.textContent = `${TOOL_HINT[t] || ""}(Esc で中止)`;
+  }
+  // 古い形式({h:[価格], t:[{a,b}]})の描画を読み替える
+  function loadDrawings(code) {
+    const v2 = LS.get(`stockrank-draw2-${code}`, null); if (Array.isArray(v2)) return v2;
+    const old = LS.get(`stockrank-draw-${code}`, null); const out = [];
+    (old?.h || []).forEach((p) => out.push({ type: "hline", a: { t: S.bars?.at(-1)?.time || "2026-01-01", p } }));
+    (old?.t || []).forEach((d) => out.push({ type: "trend", a: { t: d.a.time, p: d.a.price }, b: { t: d.b.time, p: d.b.price } }));
+    return out;
+  }
+  function saveDrawings() { LS.set(`stockrank-draw2-${S.code}`, S.drawings); if (drawLayer) { drawLayer.items = S.drawings; drawLayer.update(); } syncToolbar(); }
   // 表示中の足(週足・月足は time=期間の最初の取引日)
   function barIndexAt(rows, date) { let lo = 0, hi = rows.length - 1, ans = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (rows[m].start <= date) { ans = m; lo = m + 1; } else hi = m - 1; } return ans; }
+  // 日付 → 足の位置(未来は 1 足ぶんの日数で概算)
+  function dateToLogical(d) {
+    const bars = S.bars || []; if (!bars.length) return null;
+    const last = bars.at(-1);
+    if (d <= last.end) { const i = barIndexAt(bars, d); return i < 0 ? 0 : i; }
+    const days = (Date.parse(`${d}T00:00:00Z`) - Date.parse(`${last.end}T00:00:00Z`)) / 864e5;
+    return bars.length - 1 + days / ({ "1d": 7 / 5, "1w": 7, "1mo": 30.4 }[S.set.interval] || 1.4);
+  }
+  function dateToX(d) { const l = dateToLogical(d); return l === null || !chart ? null : chart.timeScale().logicalToCoordinate(l); }
+  function logicalToDate(l) {
+    const bars = S.bars || []; if (!bars.length) return null; const i = Math.round(l);
+    if (i <= bars.length - 1) return bars[Math.max(0, i)].time;
+    const extra = i - (bars.length - 1); const t = new Date(`${bars.at(-1).end}T00:00:00Z`); t.setUTCDate(t.getUTCDate() + Math.round(extra * ({ "1d": 7 / 5, "1w": 7, "1mo": 30.4 }[S.set.interval] || 1.4)));
+    return t.toISOString().slice(0, 10);
+  }
+  function barsBetween(a, b) { const x = dateToLogical(a), y = dateToLogical(b); return x === null || y === null ? null : Math.round(Math.abs(y - x)); }
+  // クリック位置 → {t: 日付, p: 価格}。マグネットなら一番近い OHLC に吸着
+  function anchorFrom(param) {
+    if (!param.point || !mainSeries) return null;
+    const l = chart.timeScale().coordinateToLogical(param.point.x); if (l === null) return null;
+    let p = mainSeries.coordinateToPrice(param.point.y); if (p === null) return null;
+    const t = logicalToDate(l);
+    if (S.set.magnet) { const bar = S.bars[Math.round(l)]; if (bar) p = [bar.o, bar.h, bar.l, bar.c].reduce((best, v) => (Math.abs(v - p) < Math.abs(best - p) ? v : best), bar.c); }
+    return { t, p };
+  }
+  function onChartClick(param) {
+    if (!mainSeries || !drawLayer) return;
+    if (param.paneIndex && param.paneIndex !== 0) return;
+    const a = anchorFrom(param); if (!a) return;
+    const tool = param.sourceEvent?.shiftKey && S.tool === "cursor" ? "measure" : S.tool;
+    if (tool === "cursor") { const i = drawLayer.hitTest2(param.point.x, param.point.y); drawLayer.selected = i; drawLayer.update(); return; }
+    const need = SRDraw.POINTS[tool] || 1;
+    if (need === 1 || S.pending) {
+      const item = need === 1 ? { type: tool, a } : { type: tool, a: S.pending, b: a };
+      if (tool === "text") { const text = prompt("テキスト"); if (!text) { setTool("cursor"); return; } item.text = text; }
+      if (tool === "measure") { drawLayer.preview = item; S.pending = null; drawLayer.update(); if (S.tool === "measure") setTool("cursor"); drawLayer.preview = item; drawLayer.update(); return; }
+      pushUndo(); S.drawings.push(item); drawLayer.selected = S.drawings.length - 1; saveDrawings(); setTool("cursor");
+      return;
+    }
+    S.pending = a; $("#tvHint").textContent = "終点をクリック(Esc で中止)";
+  }
+  function onCrosshairDraw(param) {
+    if (!drawLayer || !S.pending || !param.point) return;
+    const b = anchorFrom(param); if (!b) return;
+    const tool = S.tool === "cursor" ? "measure" : S.tool;
+    drawLayer.preview = { type: tool, a: S.pending, b }; drawLayer.update();
+  }
   // 信用残の観測日を、その日を含む足に載せる(同じ足に複数あれば最後の観測)
   function creditOnBars(est, rows) {
     const map = new Map(); const lastEnd = rows.at(-1)?.end;
@@ -445,8 +611,8 @@
     const cur = S.cur; if (!cur) return;
     ensureChart();
     const range = keepRange ? chart.timeScale().getVisibleLogicalRange() : null;
-    [mainSeries, ...overlay, ...paneSeries, ...drawingObjs.filter((o) => o.series).map((o) => o.series)].forEach((s) => { if (s) try { chart.removeSeries(s); } catch { /* */ } });
-    overlay = []; paneSeries = []; drawingObjs = []; mainSeries = null;
+    [mainSeries, ...overlay, ...paneSeries, ...compareSeries].forEach((s) => { if (s) try { chart.removeSeries(s); } catch { /* */ } });
+    overlay = []; paneSeries = []; compareSeries = []; mainSeries = null; S.legendSeries = [];
     while (chart.panes().length > 1) chart.removePane(chart.panes().length - 1);
     const interval = S.set.interval;
     const bars = SRInd.aggregate(cur.daily, cur.weekly, interval);
@@ -459,15 +625,21 @@
     const up = UP(), down = DOWN();
     // 主系列
     const t = S.set.type;
-    if (t === "line") { mainSeries = chart.addSeries(LW.LineSeries, { color: css("--accent"), lineWidth: 2, priceFormat }); mainSeries.setData(shown.map((r) => ({ time: r.time, value: r.c }))); }
+    if (t === "hollow") { mainSeries = chart.addSeries(LW.CandlestickSeries, { upColor: "rgba(0,0,0,0)", downColor: down, borderUpColor: up, borderDownColor: down, wickUpColor: up, wickDownColor: down, priceFormat }); mainSeries.setData(shown.map((r) => ({ time: r.time, open: r.o, high: r.h, low: r.l, close: r.c }))); }
+    else if (t === "baseline") { const base = shown.at(Math.max(0, shown.length - 120))?.c ?? last.c; mainSeries = chart.addSeries(LW.BaselineSeries, { baseValue: { type: "price", price: base }, topLineColor: up, bottomLineColor: down, topFillColor1: alpha(up, 0.28), topFillColor2: alpha(up, 0.05), bottomFillColor1: alpha(down, 0.05), bottomFillColor2: alpha(down, 0.28), lineWidth: 2, priceFormat }); mainSeries.setData(shown.map((r) => ({ time: r.time, value: r.c }))); }
+    else if (t === "line") { mainSeries = chart.addSeries(LW.LineSeries, { color: css("--accent"), lineWidth: 2, priceFormat }); mainSeries.setData(shown.map((r) => ({ time: r.time, value: r.c }))); }
     else if (t === "area") { mainSeries = chart.addSeries(LW.AreaSeries, { lineColor: css("--accent"), topColor: alpha(css("--accent"), 0.35), bottomColor: alpha(css("--accent"), 0.02), lineWidth: 2, priceFormat }); mainSeries.setData(shown.map((r) => ({ time: r.time, value: r.c }))); }
     else if (t === "bar") { mainSeries = chart.addSeries(LW.BarSeries, { upColor: up, downColor: down, priceFormat }); mainSeries.setData(shown.map((r) => ({ time: r.time, open: r.o, high: r.h, low: r.l, close: r.c }))); }
     else { mainSeries = chart.addSeries(LW.CandlestickSeries, { upColor: up, downColor: down, wickUpColor: up, wickDownColor: down, borderVisible: false, priceFormat }); mainSeries.setData(shown.map((r) => ({ time: r.time, open: r.o, high: r.h, low: r.l, close: r.c }))); }
-    chart.priceScale("right", 0).applyOptions({ mode: S.set.scale, scaleMargins: { top: 0.08, bottom: S.set.ind.includes("vol") ? 0.2 : 0.06 } });
+    const hidden = new Set(S.set.hiddenInd || []);
+    chart.priceScale("right", 0).applyOptions({ mode: S.compare.length ? LW.PriceScaleMode.Percentage : S.set.scale, scaleMargins: { top: 0.08, bottom: S.set.ind.includes("vol") && !hidden.has("vol") ? 0.2 : 0.06 } });
+    // 描画(トレンドライン・水平線など)は主系列に付けたプリミティブで描く
+    drawLayer = drawLayer || new SRDraw.DrawingLayer({ toX: dateToX, toY: (p) => mainSeries?.priceToCoordinate(p) ?? null, fmt: fmtPrice, color: () => css("--draw"), bars: barsBetween });
+    mainSeries.attachPrimitive(drawLayer); drawLayer.items = S.drawings; drawLayer.hidden = !!S.set.hideDrawings; drawLayer.selected = -1; drawLayer.preview = null;
 
     const closes = bars.map((r) => r.c);
     const addLine = (values, color, extra, pane = 0) => { const s = chart.addSeries(LW.LineSeries, lineOpts(color, { priceFormat, ...extra }), pane); s.setData(bars.map((r, i) => (Number.isFinite(values[i]) ? { time: r.time, value: values[i] } : { time: r.time }))); (pane ? paneSeries : overlay).push(s); return s; };
-    const ind = S.set.ind;
+    const ind = S.set.ind.filter((k) => !hidden.has(k));
     if (ind.includes("vol")) {
       const v = chart.addSeries(LW.HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "vol", priceLineVisible: false, lastValueVisible: false });
       v.priceScale().applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
@@ -483,6 +655,13 @@
       [[k.spanA, "#43a047"], [k.spanB, "#ef5350"]].forEach(([vals, c]) => { const s = chart.addSeries(LW.LineSeries, lineOpts(alpha(c, 0.8), { priceFormat })); s.setData(spanData(vals)); overlay.push(s); });
       const ch = chart.addSeries(LW.LineSeries, lineOpts(alpha("#9e9e9e", 0.8), { priceFormat })); ch.setData(bars.slice(shift).map((r, i) => ({ time: bars[i].time, value: r.c }))); overlay.push(ch);
     }
+    // 比較(他の銘柄・指数を % で重ねる。価格軸は % 表示になる)
+    S.compare.forEach((c, k) => {
+      if (!c.bars) return;
+      const cb2 = SRInd.aggregate(c.bars, [], interval).filter((r) => r.time >= bars[0].time);
+      const s = chart.addSeries(LW.LineSeries, { color: COMPARE_COLORS[k % COMPARE_COLORS.length], lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: c.label });
+      s.setData(cb2.map((r) => ({ time: r.time, value: r.c }))); compareSeries.push(s);
+    });
     // 信用残を足に載せる
     const cb = creditOnBars(cur.est, bars);
     if (ind.includes("avgcost") && cb.length) {
@@ -498,13 +677,13 @@
       S.earnMarks = marks;
     } else S.earnMarks = new Map();
     // サブチャート
-    let pane = 0;
+    let pane = 0; const paneKinds = [];
     const addPaneLine = (p, data, color, extra = {}) => { const s = chart.addSeries(LW.LineSeries, lineOpts(color, { lineWidth: 1.5, lastValueVisible: true, ...extra }), p); s.setData(data); paneSeries.push(s); return s; };
     const pctFmt = { type: "custom", formatter: (v) => `${(v).toFixed(1)}%`, minMove: 0.1 };
     for (const k of S.set.panes) {
       if (["credit", "ratio", "pnl", "amount"].includes(k) && !cb.length) continue;
       if (cur.isIndex && ["pnl", "amount"].includes(k)) continue;
-      pane++;
+      pane++; paneKinds.push(k);
       if (k === "rsi") { const s = addPaneLine(pane, bars.map((r, i) => { const v = SRInd.rsi(closes)[i]; return Number.isFinite(v) ? { time: r.time, value: v } : { time: r.time }; }), "#7e57c2", { title: "RSI" }); [30, 70].forEach((lv) => s.createPriceLine({ price: lv, color: css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: false })); }
       if (k === "macd") {
         const m = SRInd.macd(closes);
@@ -533,11 +712,10 @@
       }
     }
     const panes = chart.panes();
-    // サブチャートが多いときは主チャートが潰れないよう、高さを足して主チャートの比率も上げる
-    panes.forEach((p, i) => p.setStretchFactor(i === 0 ? Math.max(3.2, (panes.length - 1) * 1.1) : 1));
-    $('[data-view="chart"]').style.setProperty("--tv-extra", `${Math.max(0, panes.length - 3) * 80}px`);
+    panes.forEach((p, i) => p.setStretchFactor(i === 0 ? Math.max(3, (panes.length - 1) * 1.1) : 1));
     $("#tvChart").dataset.panes = String(panes.length);
-    renderDrawings();
+    S.paneKinds = paneKinds;
+    syncToolbar();
     if (range) chart.timeScale().setVisibleLogicalRange(range);
     else {
       const n = bars.length; const show = { "1d": 160, "1w": 156, "1mo": 120 }[interval];
@@ -545,9 +723,16 @@
       chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, n - show), to: n + extra });
     }
     renderLegend(null);
+    requestAnimationFrame(renderPaneLegends);
   }
 
-  // ---------- 凡例(左上の OHLC) ----------
+  // ---------- 凡例(左上: 銘柄と OHLC、指標ごとの行。TradingView のように 👁 と ✕) ----------
+  function indValues(i) {
+    const bars = S.bars; const key = `${S.code}${S.set.interval}${bars.length}`;
+    if (S.legendCache?.key !== key) { const closes = bars.map((b) => b.c); const bb = SRInd.bollinger(closes); S.legendCache = { key, ...Object.fromEntries(["ma5", "ma25", "ma75", "ma200"].map((m) => [m, SRInd.sma(closes, Number(m.slice(2)))])), bb }; }
+    const c = S.legendCache;
+    return { ma5: fmtPrice(c.ma5[i]), ma25: fmtPrice(c.ma25[i]), ma75: fmtPrice(c.ma75[i]), ma200: fmtPrice(c.ma200[i]), bb: `${fmtPrice(c.bb.up[i])} ${fmtPrice(c.bb.mid[i])} ${fmtPrice(c.bb.lo[i])}`, vol: vol(bars[i]?.v) };
+  }
   function renderLegend(time) {
     const bars = S.bars || []; if (!bars.length) return;
     let i = time ? S.barByTime.get(time) : bars.length - 1; if (i === undefined) i = bars.length - 1;
@@ -555,42 +740,101 @@
     const chg = p ? r.c - p.c : null, ch = p ? r.c / p.c - 1 : null; const k = cls(chg);
     const row = S.cur.row;
     const iv = { "1d": "1日", "1w": "1週", "1mo": "1か月" }[S.set.interval];
-    const closes = S.legendCache?.key === `${S.code}${S.set.interval}` ? S.legendCache : (S.legendCache = { key: `${S.code}${S.set.interval}`, ...Object.fromEntries(["ma5", "ma25", "ma75", "ma200"].map((m) => [m, SRInd.sma(bars.map((b) => b.c), Number(m.slice(2)))])) });
-    const ma = ["ma5", "ma25", "ma75", "ma200"].filter((m) => S.set.ind.includes(m)).map((m) => `<b style="color:${IND_COLORS[m]}">MA${m.slice(2)} ${fmtPrice(closes[m][i])}</b>`).join(" ");
+    const hidden = new Set(S.set.hiddenInd || []); const vals = indValues(i);
+    const indRows = S.set.ind.map((key) => {
+      const label = (IND_MENU.find(([x]) => x === key) || [key, key])[1].replace("移動平均 ", "MA ").replace("ボリンジャーバンド 20, 2σ", "BB 20 2");
+      const v = vals[key] ? ` <b style="color:${IND_COLORS[key]}">${vals[key]}</b>` : "";
+      return `<div class="lg-ind ${hidden.has(key) ? "off" : ""}"><span>${esc(label)}</span>${hidden.has(key) ? "" : v}<span class="lg-btns"><button type="button" data-lg-eye="${key}" title="表示/非表示">👁</button><button type="button" data-lg-del="${key}" title="外す">✕</button></span></div>`;
+    }).join("");
+    const cmp = S.compare.map((c, n) => { const rr = c.bars ? c.bars.filter((b) => b.d <= r.end).at(-1) : null; return `<div class="lg-ind"><span style="color:${COMPARE_COLORS[n % COMPARE_COLORS.length]}">● ${esc(c.label)}</span> <b>${rr ? fmtPrice(rr.c) : "—"}</b><span class="lg-btns"><button type="button" data-lg-cmp="${n}" title="比較を外す">✕</button></span></div>`; }).join("");
     // その足の時点の最新の信用残
     let cr = null; for (const x of S.cur.est.rows) { if (x.date <= r.end) cr = x; else break; }
     const crLine = cr && S.cur.isIndex ? `<div class="lg-line lg-credit"><em>信用残 ${esc(S.cur.creditLabel)} ${esc(cr.date)}</em> <span>買残 <b class="cb">${fmt(cr.buy)}</b></span> <span>売残 <b class="cs">${fmt(cr.sell)}</b></span> <span>倍率 <b>${fmt(cr.ratio, 2)}</b></span></div>` : cr ? `<div class="lg-line lg-credit"><em>信用 ${esc(cr.date)}</em> <span>買残 <b class="cb">${fmt(cr.buy)}</b></span> <span>売残 <b class="cs">${fmt(cr.sell)}</b></span> <span>倍率 <b>${fmt(cr.ratio, 2)}</b></span> <span>買残金額 <b>${oku(cr.buyAmount)}</b></span> <span>推定損益 買 <b class="${cls(cr.buyPnl)}">${pct(cr.buyPnl)}</b> / 売 <b class="${cls(cr.sellPnl)}">${pct(cr.sellPnl)}</b>${cr.warmup ? ' <small title="履歴の最初の半年は推定が不安定">(参考)</small>' : ""}</span></div>` : "";
     const ev = S.earnMarks?.get(r.time);
     const evLine = ev ? `<div class="lg-line lg-earn"><em>決算発表 ${esc(ev.date)}</em> <b>${esc(ev.period || "")}</b>${ev.sales !== null && ev.sales !== undefined ? ` <span>売上高 ${mil(ev.sales)}</span>` : ""}${ev.op !== null && ev.op !== undefined ? ` <span>営業利益 ${mil(ev.op)}${ev.opYoy !== null && ev.opYoy !== undefined ? `(${pct(ev.opYoy)})` : ""}</span>` : ""}${ev.react5 !== null && ev.react5 !== undefined ? ` <span>発表後5日 <b class="${cls(ev.react5)}">${pct(ev.react5)}</b></span>` : ""}</div>` : "";
-    const title = S.cur.isIndex ? `${esc(S.cur.idx.name)} · ${esc(S.cur.idx.symbol)} · ${iv}` : `${esc(S.code)} · ${esc(row?.name || "")} · ${iv} · 東証`;
-    $("#tvLegend").innerHTML = `<div class="lg-line"><strong>${title}</strong> <span>始<b class="${k}">${fmtPrice(r.o)}</b></span><span>高<b class="${k}">${fmtPrice(r.h)}</b></span><span>安<b class="${k}">${fmtPrice(r.l)}</b></span><span>終<b class="${k}">${fmtPrice(r.c)}</b></span>${chg === null ? "" : `<b class="${k}">${chg >= 0 ? "+" : ""}${fmtPrice(chg)} (${pct(ch, 2)})</b>`} <span>出来高<b>${vol(r.v)}</b></span> <small>${esc(r.start === r.end ? r.start : `${r.start}〜${r.end}`)}</small></div>${ma ? `<div class="lg-line">${ma}</div>` : ""}${evLine}${crLine}`;
+    const title = S.cur.isIndex ? `${esc(S.cur.idx.name)} · ${iv} · ${esc(S.cur.idx.symbol)}` : `${esc(row?.name || "")} · ${iv} · 東証`;
+    $("#tvLegend").innerHTML = `<div class="lg-line lg-head"><strong>${title}</strong> <span>始<b class="${k}">${fmtPrice(r.o)}</b></span><span>高<b class="${k}">${fmtPrice(r.h)}</b></span><span>安<b class="${k}">${fmtPrice(r.l)}</b></span><span>終<b class="${k}">${fmtPrice(r.c)}</b></span>${chg === null ? "" : `<b class="${k}">${chg >= 0 ? "+" : ""}${fmtPrice(chg)} (${pct(ch, 2)})</b>`} <small>${esc(r.start === r.end ? r.start : `${r.start}〜${r.end}`)}</small></div>${indRows}${cmp}${evLine}${crLine}`;
   }
-  function onCrosshair(param) { if (!S.cur) return; renderLegend(param?.time !== undefined ? timeKey(param.time) : null); }
+  // 凡例のボタン(👁 / ✕)
+  function bindLegend() {
+    $("#tvLegend").addEventListener("click", (e) => {
+      const eye = e.target.closest("[data-lg-eye]"), del = e.target.closest("[data-lg-del]"), cmp = e.target.closest("[data-lg-cmp]");
+      if (eye) { const k = eye.dataset.lgEye; const h = new Set(S.set.hiddenInd || []); h.has(k) ? h.delete(k) : h.add(k); S.set.hiddenInd = [...h]; }
+      else if (del) { S.set.ind = S.set.ind.filter((x) => x !== del.dataset.lgDel); }
+      else if (cmp) { S.compare.splice(Number(cmp.dataset.lgCmp), 1); }
+      else return;
+      saveSettings(); renderChart(true);
+    });
+    $("#tvPaneLegends").addEventListener("click", (e) => {
+      const del = e.target.closest("[data-pane-del]"); if (!del) return;
+      S.set.panes = S.set.panes.filter((x) => x !== del.dataset.paneDel); saveSettings(); renderChart(true);
+    });
+  }
+  // サブチャートの左上に名前(TradingView と同じ位置)。各段の高さから位置を出す
+  function renderPaneLegends() {
+    const box = $("#tvPaneLegends"); if (!box || !chart) return;
+    const panes = chart.panes(); let y = 0; const out = [];
+    const label = (k) => (PANE_MENU.find(([x]) => x === k) || [k, k])[1];
+    panes.forEach((p, i) => { if (i > 0) out.push(`<div class="pane-lg" style="top:${y + 4}px"><span>${esc(label(S.paneKinds?.[i - 1]))}</span><button type="button" data-pane-del="${S.paneKinds?.[i - 1]}" title="外す">✕</button></div>`); y += p.getHeight() + 1; });
+    box.innerHTML = out.join("");
+  }
+  function onCrosshair(param) { if (!S.cur) return; renderLegend(param?.time !== undefined ? timeKey(param.time) : null); onCrosshairDraw(param); }
 
-  // ---------- 描画ツール ----------
-  function snapTime(t) { const bars = S.bars || []; const i = barIndexAt(bars, t); return i >= 0 ? bars[i].time : t; }
-  function onChartClick(param) {
-    if (S.tool === "cursor" || !param.point || param.time === undefined || !mainSeries) return;
-    if (param.paneIndex && param.paneIndex !== 0) return;
-    const price = mainSeries.coordinateToPrice(param.point.y); if (price === null) return;
-    const time = timeKey(param.time);
-    if (S.tool === "hline") { S.drawings.h.push(price); saveDrawings(); setTool("cursor"); return; }
-    if (S.tool === "trend") {
-      if (!S.pending) { S.pending = { time, price }; $("#tvHint").textContent = "トレンドライン: 終点をクリック"; return; }
-      if (S.pending.time !== time) S.drawings.t.push({ a: S.pending, b: { time, price } });
-      saveDrawings(); setTool("cursor");
-    }
+  // ---------- 銘柄検索・比較(TradingView のダイアログ) ----------
+  let symModalMode = "go", symSel = 0, symKind = "all";
+  function openSymModal(mode, first = "") {
+    symModalMode = mode; symSel = 0;
+    $("#symModalTitle").textContent = mode === "compare" ? "比較する銘柄・指数を追加" : "銘柄・指数を検索";
+    const m = $("#symModal"); m.hidden = false; const input = $("#symModalInput"); input.value = first; input.focus(); drawSymList();
   }
-  function saveDrawings() { LS.set(`stockrank-draw-${S.code}`, S.drawings); renderDrawings(); }
-  function renderDrawings() {
-    drawingObjs.forEach((o) => { try { if (o.line) mainSeries?.removePriceLine(o.line); if (o.series) chart.removeSeries(o.series); } catch { /* */ } });
-    drawingObjs = []; if (!mainSeries) return;
-    const c = css("--draw");
-    (S.drawings?.h || []).forEach((price) => drawingObjs.push({ line: mainSeries.createPriceLine({ price, color: c, lineWidth: 1, lineStyle: LW.LineStyle.Solid, axisLabelVisible: true, title: "" }) }));
-    (S.drawings?.t || []).forEach((d) => {
-      const a = { time: snapTime(d.a.time), value: d.a.price }, b = { time: snapTime(d.b.time), value: d.b.price };
-      if (a.time === b.time) return;
-      const s = chart.addSeries(LW.LineSeries, lineOpts(c, { lineWidth: 2, pointMarkersVisible: true, pointMarkersRadius: 3 })); s.setData([a, b].sort((x, y) => (x.time < y.time ? -1 : 1))); drawingObjs.push({ series: s });
+  function closeModals() { $$(".modal").forEach((m) => { m.hidden = true; }); }
+  function symList() {
+    const q = $("#symModalInput").value.trim().toLowerCase();
+    const idx = S.indexPages.map((p) => ({ code: `@${p.id}`, name: p.name, sub: p.symbol, kind: "index", close: p.stats?.last, chg: p.stats?.chg1d }));
+    const st = S.preds.map((r) => ({ code: r.code, name: r.name, sub: r.industry || "", kind: "stock", close: r.close, chg: r.change1d }));
+    return [...idx, ...st].filter((x) => (symKind === "all" || x.kind === symKind) && (!q || x.code.toLowerCase().replace("@", "").startsWith(q) || `${x.name} ${x.sub}`.toLowerCase().includes(q))).slice(0, 80);
+  }
+  function drawSymList() {
+    const list = symList(); symSel = Math.min(symSel, Math.max(0, list.length - 1));
+    $$("[data-symkind]").forEach((b) => b.classList.toggle("active", b.dataset.symkind === symKind));
+    $("#symModalList").innerHTML = list.map((x, i) => `<button type="button" class="sym-row ${i === symSel ? "sel" : ""}" data-pick="${esc(x.code)}"><b>${esc(x.code.replace("@", ""))}</b><span>${esc(x.name)}<small>${esc(x.sub)}</small></span><em class="kind ${x.kind}">${x.kind === "index" ? "指数" : "株式"}</em><span class="num">${fmtPrice(x.close)}</span><span class="num ${cls(x.chg)}">${pct(x.chg, 2)}</span></button>`).join("") || '<p class="muted pad">見つかりません</p>';
+    $("#symModalList .sel")?.scrollIntoView({ block: "nearest" });
+  }
+  async function pickSymbol(code) {
+    closeModals();
+    if (symModalMode === "go") { goChart(code); return; }
+    if (S.compare.some((c) => c.code === code) || code === S.code) return;
+    let bars = null, label = code;
+    if (code.startsWith("@")) { const p = S.idxById.get(code.slice(1)); bars = (p?.points || []).map((a) => ({ d: a[0], o: a[1], h: a[2], l: a[3], c: a[4], v: a[5] })); label = p?.name || code; }
+    else { const dec = SRData.decodeChart(await SRData.chartDoc(code).catch(() => null)); const first = dec.daily[0]?.d || "9999"; bars = [...dec.weekly.filter((r) => r.d < first), ...dec.daily]; label = `${code} ${S.byCode.get(code)?.name || ""}`; }
+    S.compare.push({ code, label, bars }); renderChart(true); toast(`${label} を比較に追加しました(価格軸は % 表示)`);
+  }
+  // ---------- インジケーターのダイアログ ----------
+  function openIndModal() { const m = $("#indModal"); m.hidden = false; const input = $("#indModalInput"); input.value = ""; input.focus(); drawIndList(); }
+  function drawIndList() {
+    const q = $("#indModalInput").value.trim().toLowerCase();
+    const groups = [["チャートに重ねる", IND_MENU, "ind"], ["サブチャート(下に段を追加)", PANE_MENU, "pane"]];
+    $("#indModalList").innerHTML = groups.map(([g, list, kind]) => { const items = list.filter(([, l]) => !q || l.toLowerCase().includes(q)); if (!items.length) return ""; return `<h4>${g}</h4>${items.map(([k, l]) => { const on = (kind === "ind" ? S.set.ind : S.set.panes).includes(k); return `<button type="button" class="ind-row ${on ? "on" : ""}" data-ind-pick="${kind}:${k}"><span class="chk">${on ? "✓" : ""}</span>${esc(l)}</button>`; }).join("")}`; }).join("") || '<p class="muted pad">見つかりません</p>';
+  }
+  function bindModals() {
+    $$(".modal").forEach((m) => m.addEventListener("click", (e) => { if (e.target === m || e.target.closest("[data-close]")) closeModals(); }));
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $(".modal:not([hidden])")) { e.stopPropagation(); closeModals(); } }, true);
+    const input = $("#symModalInput");
+    input.addEventListener("input", () => { symSel = 0; drawSymList(); });
+    input.addEventListener("keydown", (e) => {
+      const list = symList();
+      if (e.key === "ArrowDown") { e.preventDefault(); symSel = Math.min(list.length - 1, symSel + 1); drawSymList(); }
+      if (e.key === "ArrowUp") { e.preventDefault(); symSel = Math.max(0, symSel - 1); drawSymList(); }
+      if (e.key === "Enter" && list[symSel]) { e.preventDefault(); pickSymbol(list[symSel].code); }
+    });
+    $("#symModalList").addEventListener("click", (e) => { const b = e.target.closest("[data-pick]"); if (b) pickSymbol(b.dataset.pick); });
+    $$("[data-symkind]").forEach((b) => b.addEventListener("click", () => { symKind = b.dataset.symkind; drawSymList(); input.focus(); }));
+    $("#indModalInput").addEventListener("input", drawIndList);
+    $("#indModalList").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-ind-pick]"); if (!b) return; const [kind, k] = b.dataset.indPick.split(":");
+      if (kind === "ind") S.set.ind = S.set.ind.includes(k) ? S.set.ind.filter((x) => x !== k) : [...S.set.ind, k];
+      else S.set.panes = S.set.panes.includes(k) ? S.set.panes.filter((x) => x !== k) : PANE_MENU.map(([x]) => x).filter((x) => x === k || S.set.panes.includes(x));
+      saveSettings(); drawIndList(); if (S.cur) renderChart(true);
     });
   }
 
