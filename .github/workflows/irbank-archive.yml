@@ -74,6 +74,7 @@ jobs:
         run: |
           git config user.name "stock-rank-bot"
           git config user.email "stock-rank-bot@users.noreply.github.com"
+          if [ ! -d data/irbank ]; then echo "保存データなし"; exit 0; fi
           git add data/irbank
           if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
           git commit -m "IRBANK archive $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M')"
