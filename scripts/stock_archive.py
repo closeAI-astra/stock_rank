@@ -677,8 +677,11 @@ def main() -> int:
         if (i + 1) % 10 == 0:  # 途中経過も書いておく(強制終了に備える)
             index["updatedAt"] = now_iso()
             index_path.write_bytes(encrypt_json(index, key))
-        if failed >= 15 and done == 0:
-            print(f"::warning::連続して取得に失敗しています({src.label} が応答しない可能性)。中断します。")
+        # 最初から拒否・失敗が続くときは、相手に同じリクエストを繰り返さずにやめる
+        if done == 0 and failed >= 3:
+            st = res["status"]
+            why = "アクセスを拒否しています(HTTP 403)。この実行環境(GitHub Actions など)からの取得を相手が許可していません。自分の PC から実行してください(README「自分の PC で実行」)" if st == "http_403" else f"応答しません({st})"
+            print(f"::warning::{src.label} が{why}。中断します。")
             break
 
     if raw and opts.raw_out:

@@ -2,6 +2,9 @@ name: Kabutan weekly
 
 # 株探から、stockAI(Future Sight)の対象銘柄の信用残(週次)・決算(業績・配当)・銘柄トップを取得し、暗号化して data/kabutan/ に積み増す。
 # IRBANK の代わりの定期取得。信用残は毎週火曜の夕方に前週金曜申込分が出るので、水曜の朝に取る。
+# ※ 2026-10-26 時点で株探は GitHub Actions からの接続を HTTP 405 で拒否する。定期取得は自分の PC で
+#    scripts/register_weekly_task.ps1 を一度実行して、Windows のタスク スケジューラで動かす(README「自分の PC で実行」)。
+#    このワークフローは手動実行だけ残す(定期実行はしない)。
 # 初回(と、たまに)は mode=full で、信用残の過去ページ・大株主などもまとめて取る。
 on:
   workflow_dispatch:
@@ -24,8 +27,6 @@ on:
         description: "リクエスト間隔(秒)"
         required: false
         default: "1.5"
-  schedule:
-    - cron: "23 21 * * 2" # 毎週水曜 06:23 JST
 
 permissions:
   contents: write

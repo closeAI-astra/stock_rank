@@ -2,3 +2,4 @@ raw.tar.gz.enc
 __pycache__/
 *.pyc
 node_modules/
+*.tar.gz.enc

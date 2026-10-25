@@ -35,8 +35,8 @@ stockAI(Future Sight)が集めた実データ(株価・決算・配当・財務�
 
 | ワークフロー | 役割 | 取るもの | 頻度 |
 | --- | --- | --- | --- |
-| `kabutan-weekly.yml`(**Kabutan weekly**) | これからの定期取得 | `mode=weekly`: 信用残(`/stock/kabuka?code=…&ashi=shin` の1ページ目)・決算(`/stock/finance?code=…`、業績・配当)・銘柄トップ。信用残の履歴は日付で合わせて積み増す<br>`mode=full`: 上に加えて信用残の過去ページ・大株主など銘柄トップからリンクされたページ | 毎週水曜 06:23 JST(信用残は火曜夕方に前週金曜申込分が出る)。初回は手動で `mode=full` |
-| `irbank-archive.yml`(**IRBANK archive**) | 使えなくなる前の一度きりの保存 | 銘柄トップのリンクから見つけた個別ページ(信用残・空売り・貸借など)すべて | 全銘柄そろうまで毎日続きを取り、そろった後は接続しない |
+| `kabutan-weekly.yml`(**Kabutan weekly**)/ PC の `register_weekly_task.ps1` | これからの定期取得 | `mode=weekly`: 信用残(`/stock/kabuka?code=…&ashi=shin` の1ページ目)・決算(`/stock/finance?code=…`、業績・配当)・銘柄トップ。信用残の履歴は日付で合わせて積み増す<br>`mode=full`: 上に加えて信用残の過去ページ・大株主など銘柄トップからリンクされたページ | PC のタスク スケジューラで毎週水曜 07:23(信用残は火曜夕方に前週金曜申込分が出る)。初回は `-Mode full` |
+| `irbank-archive.yml`(**IRBANK archive**)/ PC の `run_local.ps1` | 使えなくなる前の一度きりの保存 | 銘柄トップのリンクから見つけた個別ページ(信用残・空売り・貸借など)すべて | PC で実行。途中で止めても続きから。そろった後は接続しない |
 
 保存先:
 
@@ -53,6 +53,28 @@ stockAI(Future Sight)が集めた実データ(株価・決算・配当・財務�
 3. Actions → **Kabutan weekly** → Run workflow で `mode=full`(初回の取り込み)。以後は毎週自動
 
 1 回は最大約 5 時間で区切り、続きは次回に未取得の銘柄から再開します。取得に失敗した銘柄は、前回保存した良いデータを上書きしません。見つからない銘柄は 3 回失敗すると定期実行では諦めます。robots.txt に従い、間隔は既定 1.5 秒です。
+
+### 自分の PC で実行(株探・IRBANK とも)
+
+2026-10-26 に確認したところ、**株探(HTTP 405)も IRBANK(HTTP 403)も GitHub Actions からの接続を拒否**します(IRBANK は robots.txt の取得も拒否)。そのため取得は自分の PC で行います。拒否を回避するような細工(ブラウザを装う・別の経路を使う)はしていません。PC からも拒否される場合は、相手が許可していないということなので、そこで止めます。2つのワークフローは手動実行だけ残しています。
+
+```powershell
+git clone https://github.com/closeAI-astra/stock_rank.git   # 初回だけ
+cd stock_rank
+git switch claude/stockrank-page-dev-ndc53i
+
+# IRBANK(今のうちに一度だけ全部)。まず1銘柄で試してから全銘柄
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Codes 7203
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
+
+# 株探: 初回は過去ページまで取り込み → 以後は毎週水曜 07:23 にタスク スケジューラで自動実行
+powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Source kabutan -Mode full
+powershell -ExecutionPolicy Bypass -File scripts\register_weekly_task.ps1
+```
+
+- パスワードは実行時に聞かれます(画面に表示されません)。定期実行のために `register_weekly_task.ps1` が保存する場合は、Windows の DPAPI で暗号化して `%LOCALAPPDATA%\stock_rank\fs-password.txt` に置きます(その PC・そのユーザーでしか読めません)。
+- 取得した表は暗号化して `data/irbank/`・`data/kabutan/` に保存し、GitHub に送ります。生の HTML は暗号化した `*-raw-*.tar.gz.enc` として PC に残ります(GitHub には送りません)。
+- 途中で止めても、次の実行は未取得の銘柄から続けます。
 
 ## 公開(GitHub Pages)
 

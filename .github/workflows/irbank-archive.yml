@@ -1,6 +1,8 @@
 name: IRBANK archive
 
 # IRBANK の個別銘柄ページ(信用残・空売り・貸借など)を、使えなくなる前に一度だけ保存する(暗号化して data/irbank/)。
+# ※ 2026-10-26 時点で IRBANK は GitHub Actions からの接続を HTTP 403 で拒否する。IRBANK の保存は自分の PC で
+#    scripts/run_local.ps1 を実行する(README「自分の PC で実行」)。このワークフローは手動実行だけ残す(定期実行はしない)。
 # これからの定期取得は株探(kabutan-weekly.yml)。この IRBANK 側は全銘柄そろうまで毎日続きを取り、
 # そろった後(と、3回失敗した銘柄)は IRBANK に接続せずにすぐ終わる。不要になったら Actions でこのワークフローを無効にしてよい。
 on:
@@ -18,8 +20,6 @@ on:
         description: "リクエスト間隔(秒)"
         required: false
         default: "1.5"
-  schedule:
-    - cron: "17 18 * * *" # 毎日 03:17 JST(未取得の銘柄だけ進める。そろったら何もしない)
 
 permissions:
   contents: write

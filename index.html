@@ -25,6 +25,7 @@
         <a class="nav-item" href="#rank" data-nav="rank"><span class="nav-icon">☷</span><span>ランキング・信用</span></a>
         <a class="nav-item" href="#macro" data-nav="macro"><span class="nav-icon">◇</span><span>マクロ・貿易</span></a>
         <a class="nav-item" href="#archive" data-nav="archive"><span class="nav-icon">▦</span><span>保存データ</span></a>
+        <a class="nav-item" href="#settings" data-nav="settings"><span class="nav-icon">⚙</span><span>設定</span></a>
         <a class="nav-item" href="#about" data-nav="about"><span class="nav-icon">?</span><span>使い方</span></a>
       </nav>
       <div class="sidebar-foot">
@@ -43,13 +44,8 @@
           <kbd>/</kbd>
         </label>
         <div class="top-actions">
-          <div class="theme-switch" role="group" aria-label="表示テーマ">
-            <button type="button" data-theme-value="light">Light</button>
-            <button type="button" data-theme-value="dark">Dark</button>
-            <button type="button" data-theme-value="prototype">Prototype</button>
-            <button type="button" data-theme-value="earth">Earth</button>
-          </div>
           <span class="sync-status"><i></i><span id="asOf">読込中</span></span>
+          <a class="settings-link" href="#settings" title="設定(テーマ・チャートの既定など)" aria-label="設定">⚙<span>設定</span></a>
         </div>
       </header>
 
@@ -124,6 +120,12 @@
       <div id="archiveBody"></div>
     </section>
 
+    <!-- 設定 -->
+    <section class="view page" data-view="settings">
+      <div class="page-head"><p class="eyebrow">SETTINGS</p><h1>設定</h1><p>表示テーマやチャートの既定などを変えられます。設定はこの端末(ブラウザ)に保存されます。</p></div>
+      <div id="settingsBody"></div>
+    </section>
+
     <!-- 使い方 -->
     <section class="view page" data-view="about">
       <div class="page-head"><p class="eyebrow">GUIDE</p><h1>使い方・計算方法</h1><p>株価・決算・配当・信用残などの<b>実データを自分で確認するためのページ</b>です。AI による株価予測は表示しません(推定と書いた信用評価損益率だけは、下の方法で残高から計算した値です)。</p></div>
@@ -140,7 +142,7 @@
           <li>左の ― で水平線、╱ で2点のトレンドライン。描画は銘柄ごとにこの端末に保存されます。</li>
           <li>「サブチャート」で RSI・MACD・ストキャスティクスに加え、信用買残/売残・信用倍率・推定評価損益率・残高金額を下段に出せます。</li>
           <li>右のウォッチリストの「指数」で、日経平均・TOPIX・NASDAQ・S&amp;P500・VIX・米10年債・ドル円のチャートに切り替えられます(検索欄に「日経」などでも可)。日本株の指数では、サブチャートの信用残・信用倍率に市場の信用残を出します。株探・IRBANK から東証全体の値を保存できていればそれを、無ければ stockAI の対象銘柄(約400)の合計を使います。下段には指数の統計・投資部門別売買・騰落と業種を出します。</li>
-          <li>右上の Light / Dark / Prototype / Earth で表示テーマを切り替えます(Future Sight と同じテーマ。同じ github.io では選んだテーマが両方に効きます)。「/」キーで検索欄へ。</li>
+          <li>表示テーマ(Light / Dark / Prototype / Earth)やチャートの既定は「設定」で変えられます。テーマは Future Sight と共有で、同じ github.io では選んだテーマが両方に効きます。「/」キーで検索欄へ。</li>
           <li>「決」の印は決算発表日です(インジケーターで切り替え)。発表日の値動きは下段の「決算発表」タブで一覧できます。</li>
         </ul>
         <h2>信用残の金額と推定評価損益率</h2>
@@ -155,9 +157,9 @@
         <p>最初の観測日は「その日の終値で建てた」と置くので、履歴の最初の約半年は 0% 寄りに出ます(表では薄く表示)。株式分割は、分割日の前後の残高の跳びから信用残が未調整かを自動判定して、金額が連続するように揃えます。一般信用・貸借の区別、現引き・現渡しは残高からは分からないため、あくまで目安です。</p>
         <p>全銘柄合計の推定損益率は、各銘柄の金額とコストを足し合わせてから割ったもの(金額加重)です。</p>
         <h2>株探・IRBANK の保存</h2>
-        <p><b>株探(これから)</b>: GitHub の Actions で <b>Kabutan weekly</b> が毎週水曜の朝に動き、Future Sight の対象銘柄の信用残(週次)・決算(業績・配当)・銘柄トップを取って、信用残の履歴を積み増します。初回は手動で <code>mode=full</code> にすると、信用残の過去ページや大株主などのページもまとめて取ります。</p>
-        <p><b>IRBANK(今回だけ)</b>: <b>IRBANK archive</b> を一度実行すると、信用残・空売り・貸借などの個別ページをすべて保存します。途中で止まっても毎日続きを取り、全銘柄そろった後は IRBANK に接続しません。</p>
-        <p>どちらもリポジトリの Secrets に <code>FS_PAGES_PASSWORD</code>(このページと同じパスワード)が必要です。</p>
+        <p><b>株探(これから)</b>: 自分の PC のタスク スケジューラ(<code>scripts\register_weekly_task.ps1</code> で登録)が毎週水曜の朝に動き、Future Sight の対象銘柄の信用残(週次)・決算(業績・配当)・銘柄トップを取って、信用残の履歴を積み増します。初回は手動で <code>mode=full</code> にすると、信用残の過去ページや大株主などのページもまとめて取ります。</p>
+        <p><b>IRBANK(今回だけ)</b>: 自分の PC で <code>scripts\run_local.ps1</code> を一度実行すると、信用残・空売り・貸借などの個別ページをすべて保存します。途中で止まっても毎日続きを取り、全銘柄そろった後は IRBANK に接続しません。</p>
+        <p>株探・IRBANK とも GitHub のサーバーからの接続を拒否するため、取得は自分の PC で行います(手順は README「自分の PC で実行」)。</p>
         <p class="muted">表示している数値は情報提供のためのもので、投資助言ではありません。</p>
       </div>
     </section>

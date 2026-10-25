@@ -122,7 +122,7 @@
   function route() {
     const h = location.hash.replace(/^#/, "");
     const [view, arg] = h.split("/");
-    const v = ["chart", "rank", "macro", "archive", "about"].includes(view) ? view : "chart";
+    const v = ["chart", "rank", "macro", "archive", "settings", "about"].includes(view) ? view : "chart";
     S.view = v;
     $$(".view").forEach((el) => el.classList.toggle("active", el.dataset.view === v));
     $$("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === v));
@@ -136,6 +136,7 @@
     if (v === "rank") renderRank();
     if (v === "macro") renderMacro();
     if (v === "archive") renderArchive();
+    if (v === "settings") renderSettings();
   }
   const goChart = (code) => { location.hash = `#chart/${code}`; };
 
@@ -166,19 +167,71 @@
       if (e.key === "/") { e.preventDefault(); input.focus(); return; }
       if (S.view === "chart" && /^[0-9a-zA-Z]$/.test(e.key)) input.focus();
     });
-    // テーマ(Future Sight と同じ 4 種・同じ保存先)
-    const markTheme = () => $$("[data-theme-value]").forEach((b) => b.classList.toggle("active", b.dataset.themeValue === (document.documentElement.dataset.fsTheme || "light")));
-    markTheme();
-    $$("[data-theme-value]").forEach((b) => b.addEventListener("click", () => {
-      document.documentElement.dataset.fsTheme = b.dataset.themeValue;
-      try { localStorage.setItem("future-sight-theme", b.dataset.themeValue); } catch { /* 保存できない環境でも表示は続ける */ }
-      markTheme();
-      requestAnimationFrame(() => { applyChartTheme(); if (S.cur) renderChart(true); rankChart?.applyOptions(chartTheme()); macroChart?.applyOptions(chartTheme()); });
-    }));
     // スマホ: サイドバーを引き出す
     $("#mobileMenu").addEventListener("click", (e) => { e.stopPropagation(); document.body.classList.toggle("menu-open"); });
     document.addEventListener("click", (e) => { if (document.body.classList.contains("menu-open") && !e.target.closest(".sidebar")) document.body.classList.remove("menu-open"); });
   }
+
+  // テーマ(Future Sight と同じ 4 種・同じ保存先)
+  const THEMES = [["light", "Light", "明るい標準"], ["dark", "Dark", "暗い背景(ダークモード)"], ["prototype", "Prototype", "セピアと歯車の背景"], ["earth", "Earth", "夜の地球の背景"]];
+  function setTheme(theme) {
+    const t = THEMES.some(([k]) => k === theme) ? theme : "light";
+    document.documentElement.dataset.fsTheme = t;
+    try { localStorage.setItem("future-sight-theme", t); } catch { /* 保存できない環境でも表示は続ける */ }
+    requestAnimationFrame(() => { applyChartTheme(); if (S.cur) renderChart(true); rankChart?.applyOptions(chartTheme()); macroChart?.applyOptions(chartTheme()); });
+  }
+
+  // =====================================================================
+  // 設定
+  // =====================================================================
+  function renderSettings() {
+    const body = $("#settingsBody"); if (!body) return;
+    const theme = document.documentElement.dataset.fsTheme || "light";
+    const opt = (list, cur) => list.map(([v, l]) => `<option value="${esc(v)}" ${String(v) === String(cur) ? "selected" : ""}>${esc(l)}</option>`).join("");
+    const checks = (list, on, attr) => list.map(([k, l]) => `<label class="check"><input type="checkbox" data-${attr}="${k}" ${on.includes(k) ? "checked" : ""}> ${esc(l)}</label>`).join("");
+    body.innerHTML = `
+      <section class="panel settings"><h3>表示テーマ</h3><p class="foot">Future Sight と同じ 4 種類。同じ github.io なら Future Sight と共通です。</p>
+        <div class="theme-cards">${THEMES.map(([k, l, d]) => `<button type="button" class="theme-card ${k === theme ? "active" : ""}" data-set-theme="${k}"><span class="swatch sw-${k}"><i></i><i></i><i></i></span><b>${l}</b><small>${d}</small></button>`).join("")}</div></section>
+      <section class="panel settings"><h3>チャートの既定</h3>
+        <div class="set-grid">
+          <label>足<select data-set="interval">${opt([["1d", "日足"], ["1w", "週足"], ["1mo", "月足"]], S.set.interval)}</select></label>
+          <label>チャートの種類<select data-set="type">${opt([["candle", "ローソク足"], ["ha", "平均足"], ["bar", "バー"], ["line", "ライン"], ["area", "エリア"]], S.set.type)}</select></label>
+          <label>価格軸<select data-set="scale">${opt([[0, "通常"], [1, "対数"], [2, "%"]], S.set.scale)}</select></label>
+          <label>ウォッチリストの並び順<select data-set="watchSort">${opt([["rank", "売買代金順"], ["chg", "前日比"], ["code", "コード"]], S.set.watchSort)}</select></label>
+        </div>
+        <h4>インジケーター</h4><div class="check-grid">${checks(IND_MENU, S.set.ind, "set-ind")}</div>
+        <h4>サブチャート</h4><div class="check-grid">${checks(PANE_MENU, S.set.panes, "set-pane")}</div></section>
+      <section class="panel settings"><h3>信用残</h3>
+        <div class="set-grid"><label>推定評価損益率の計算方法<select data-set="creditMethod">${opt([["fifo6m", "先入れ先出し+6か月期日(既定)"], ["avg", "移動平均法"]], S.set.creditMethod)}</select></label></div>
+        <p class="foot">計算方法の違いは「使い方」を参照。ランキングの計算方法もここに合わせます。</p></section>
+      <section class="panel settings"><h3>この端末に保存したもの</h3>
+        <div class="set-actions">
+          <button type="button" class="btn" data-reset="favs">お気に入りを消す(${S.favs.size}件)</button>
+          <button type="button" class="btn" data-reset="drawings">チャートの描画を全部消す</button>
+          <button type="button" class="btn" data-reset="settings">設定を初期値に戻す</button>
+          <button type="button" class="btn danger" data-reset="key">保存したパスワードを消して閉じる</button>
+        </div>
+        <p class="foot">データの配信元: ${esc(SRData.base || "—")} · データの時点: ${esc(String(S.dash?.asOf || "—"))}</p></section>`;
+    $$("[data-set-theme]", body).forEach((b) => b.addEventListener("click", () => { setTheme(b.dataset.setTheme); renderSettings(); }));
+    $$("[data-set]", body).forEach((el) => el.addEventListener("change", () => {
+      const k = el.dataset.set; S.set[k] = k === "scale" ? Number(el.value) : el.value; saveSettings(); afterSettings();
+      if (k === "creditMethod" && S.cur && !S.cur.isIndex) computeEst(S.cur);
+      if (k === "creditMethod" && S.rank) { const m = $("#rankMethod"); if (m) m.value = el.value; S.rank = computeRank(S.rankData); }
+      toast("保存しました");
+    }));
+    $$("[data-set-ind]", body).forEach((el) => el.addEventListener("change", () => { const k = el.dataset.setInd; S.set.ind = el.checked ? [...new Set([...S.set.ind, k])] : S.set.ind.filter((x) => x !== k); saveSettings(); afterSettings(); }));
+    $$("[data-set-pane]", body).forEach((el) => el.addEventListener("change", () => { const k = el.dataset.setPane; S.set.panes = el.checked ? PANE_MENU.map(([x]) => x).filter((x) => x === k || S.set.panes.includes(x)) : S.set.panes.filter((x) => x !== k); saveSettings(); afterSettings(); }));
+    $$("[data-reset]", body).forEach((b) => b.addEventListener("click", () => {
+      const what = b.dataset.reset;
+      if (what === "favs") { S.favs.clear(); LS.set("stockrank-favs", []); renderWatch(); }
+      if (what === "drawings") { try { Object.keys(localStorage).filter((k) => k.startsWith("stockrank-draw-")).forEach((k) => localStorage.removeItem(k)); } catch { /* */ } S.drawings = { h: [], t: [] }; }
+      if (what === "settings") { S.set = { ...DEFAULTS }; saveSettings(); afterSettings(); }
+      if (what === "key") { if (!confirm("この端末に保存したパスワード(復号の鍵)を消して、ページを閉じた状態に戻します。よろしいですか?")) return; SRData.forget(); location.reload(); return; }
+      toast("消しました"); renderSettings();
+    }));
+  }
+  // 設定を変えたら、チャートのツールバーと表示に反映する
+  function afterSettings() { buildToolbar(); if (S.cur) renderChart(false); renderWatch(); }
 
   // =====================================================================
   // ウォッチリスト(右)
@@ -945,7 +998,7 @@
       $("#rankIndustry").innerHTML += inds.map((x) => `<option>${esc(x)}</option>`).join("");
       ["#rankFilter", "#rankIndustry", "#rankNoWarm"].forEach((s) => $(s).addEventListener("input", drawRankTable));
       $("#rankMethod").value = S.set.creditMethod;
-      $("#rankMethod").addEventListener("change", () => { S.rank = computeRank(S.rankData); drawRankTable(); drawRankAgg(); });
+      $("#rankMethod").addEventListener("change", () => { S.set.creditMethod = $("#rankMethod").value; saveSettings(); S.rank = computeRank(S.rankData); drawRankTable(); drawRankAgg(); });
       table.addEventListener("click", (e) => { const th = e.target.closest("th[data-sort]"); if (th) { const k = th.dataset.sort; RK.desc = RK.sort === k ? !RK.desc : true; RK.sort = k; drawRankTable(); return; } const b = e.target.closest("[data-code]"); if (b) goChart(b.dataset.code); });
     }
     if (S.rank) { drawRankTable(); return; }
@@ -1107,9 +1160,9 @@
       await Promise.all(need.map(async ([k]) => { S.archiveIndex[k] = await SRData.own(`${k}/index`).catch(() => null); }));
     }
     const how = `<section class="panel prose"><h3>取得のしかた</h3><ol>
-      <li>GitHub のこのリポジトリの <b>Settings → Secrets and variables → Actions</b> に <code>FS_PAGES_PASSWORD</code>(このページと同じパスワード)を登録。</li>
-      <li><b>株探(これからの定期取得)</b>: <b>Actions → Kabutan weekly</b>。毎週水曜の朝に自動で、全銘柄の信用残(週次)・決算(業績・配当)・銘柄トップを取り、信用残の履歴を積み増します。初回は Run workflow で <code>mode=full</code> にすると、信用残の過去ページ・大株主などもまとめて取ります。</li>
-      <li><b>IRBANK(今回だけ)</b>: <b>Actions → IRBANK archive</b>。使えなくなる前に、信用残・空売り・貸借などの個別ページを一度だけ全部保存します。1回は約5時間で区切り、全銘柄そろうまで毎日続きを取り、そろった後は IRBANK に接続しません(不要になったらワークフローを無効にしてかまいません)。</li>
+      <li>株探・IRBANK とも GitHub のサーバーからの取得を拒否するため、取得は自分の PC で行います(README「自分の PC で実行」)。パスワードは実行時に入力します。</li>
+      <li><b>株探(これからの定期取得・自分の PC で)</b>: 株探は GitHub Actions からの接続を拒否(HTTP 405)するので、PC で <code>scripts\\run_local.ps1 -Source kabutan -Mode full</code> を一度実行し、<code>scripts\\register_weekly_task.ps1</code> で毎週水曜の朝の自動実行を登録します。全銘柄の信用残(週次)・決算・銘柄トップを取り、信用残の履歴を積み増します。</li>
+      <li><b>IRBANK(今回だけ・自分の PC で)</b>: IRBANK は GitHub Actions からの接続を拒否(HTTP 403)するので、自分の PC で <code>scripts\\run_local.ps1</code> を実行します(README「自分の PC で実行」)。使えなくなる前に、信用残・空売り・貸借などの個別ページを一度だけ全部保存します。途中で止めても、次の実行は未取得の銘柄から続けます。取得した表は暗号化して GitHub に送られ、このページに反映されます。</li>
       <li>表は JSON にして <code>data/kabutan/</code>・<code>data/irbank/</code> に暗号化して保存し、生の HTML は暗号化した tar を GitHub Release に置きます。</li></ol>
       <p class="muted">相手のサーバーへの負荷を抑えるため、robots.txt に従い、リクエストの間隔は既定で 1.5 秒以上あけています。</p></section>`;
     const section = ([key, label]) => {
