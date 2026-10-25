@@ -300,7 +300,7 @@
     const all = mergeCredit(cur.detail?.credit, cur.archives);
     cur.errata = all.filter((r) => CREDIT_ERRATA[r.date]);
     cur.credit = dropErrata(all);
-    cur.est = SRCredit.estimateCredit(cur.credit, priceRowsForCredit(cur), cur.splits, { method: S.set.creditMethod });
+    cur.est = SRCredit.estimateCredit(cur.credit, priceRowsForCredit(cur), cur.splits, { method: S.set.creditMethod }); cur.estFifo = null;
   }
 
   async function loadSymbol(code) {
@@ -390,6 +390,7 @@
     chart.subscribeCrosshairMove(onCrosshair);
     new ResizeObserver(() => requestAnimationFrame(renderPaneLegends)).observe($("#tvChart"));
     chart.subscribeClick(onChartClick);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(() => { clearTimeout(ensureChart.vpTimer); ensureChart.vpTimer = setTimeout(updateProfile, 60); });
     return chart;
   }
   function applyChartTheme() { chart?.applyOptions(chartTheme()); }
@@ -397,12 +398,14 @@
   const alpha = (hex, a) => { const m = hex.match(/^#([0-9a-f]{6})$/i); if (!m) return hex; const n = parseInt(m[1], 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
   const lineOpts = (color, extra = {}) => ({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...extra });
 
-  const IND_MENU = [["ma5", "移動平均 5"], ["ma25", "移動平均 25"], ["ma75", "移動平均 75"], ["ma200", "移動平均 200"], ["bb", "ボリンジャーバンド 20, 2σ"], ["ichimoku", "一目均衡表"], ["vol", "出来高"], ["avgcost", "信用買い方の推定平均取得単価"], ["earnings", "決算発表日(「決」印)"]];
+  const IND_MENU = [["ma5", "移動平均 5"], ["ma25", "移動平均 25"], ["ma75", "移動平均 75"], ["ma200", "移動平均 200"], ["bb", "ボリンジャーバンド 20, 2σ"], ["ichimoku", "一目均衡表"], ["vol", "出来高"], ["avgcost", "信用買い方の推定平均取得単価"], ["sellcost", "信用売り方の推定平均売り単価"], ["vprofile", "価格帯別出来高(表示範囲)"], ["avwap_earn", "アンカード VWAP(直近の決算発表から)"], ["avwap_hi", "アンカード VWAP(52週高値から)"], ["avwap_lo", "アンカード VWAP(52週安値から)"], ["perband", "PER バンド(実績 EPS × 過去の PER 分布)"], ["pbrband", "PBR バンド(BPS × 過去の PBR 分布)"], ["earnings", "決算発表日(「決」印)"]];
   const PANE_MENU = [["credit", "信用残(買残・売残)"], ["ratio", "信用倍率"], ["pnl", "推定 信用評価損益率"], ["amount", "信用残の金額"], ["rsi", "RSI 14"], ["macd", "MACD 12, 26, 9"], ["stoch", "ストキャスティクス 14, 3"]];
-  const IND_COLORS = { ma5: "#2962ff", ma25: "#ff9800", ma75: "#ab47bc", ma200: "#26a69a", bb: "#2962ff", ichimoku: "#e91e63", vol: "#26a69a", avgcost: "#ef5350", earnings: "#f7a600" };
+  const IND_COLORS = { ma5: "#2962ff", ma25: "#ff9800", ma75: "#ab47bc", ma200: "#26a69a", bb: "#2962ff", ichimoku: "#e91e63", vol: "#26a69a", avgcost: "#ef5350", sellcost: "#42a5f5", vprofile: "#9e9e9e", avwap_earn: "#f7a600", avwap_hi: "#ec407a", avwap_lo: "#26c6da", perband: "#8d6e63", pbrband: "#78909c", earnings: "#f7a600" };
+  // 指数では使えない指標(個別銘柄のデータが要る)
+  const STOCK_ONLY_IND = new Set(["avgcost", "sellcost", "perband", "pbrband", "earnings", "avwap_earn"]);
   const COMPARE_COLORS = ["#ff9800", "#ab47bc", "#00bcd4", "#e91e63"];
   const CHART_TYPES = [["candle", "ローソク足", "▮"], ["hollow", "中空ローソク足", "▯"], ["ha", "平均足", "▮"], ["bar", "バー", "⫶"], ["line", "ライン", "╱"], ["area", "エリア", "◺"], ["baseline", "ベースライン", "⫠"]];
-  let compareSeries = []; let drawLayer = null;
+  let compareSeries = []; let drawLayer = null; let vpLayer = null;
   S.compare = [];
 
   // ---------- ツールバー ----------
@@ -519,7 +522,7 @@
   }
 
   // ---------- 描画ツール ----------
-  const TOOL_HINT = { trend: "トレンドライン: 始点をクリック", ray: "水平レイ: 始点をクリック", hline: "水平線: 価格をクリック", vline: "垂直線: 日付をクリック", fib: "フィボナッチ: 高値(または安値)をクリック", rect: "長方形: 角をクリック", measure: "計測: 始点をクリック", text: "テキスト: 置く場所をクリック" };
+  const TOOL_HINT = { trend: "トレンドライン: 始点をクリック", ray: "水平レイ: 始点をクリック", hline: "水平線: 価格をクリック", vline: "垂直線: 日付をクリック", fib: "フィボナッチ: 高値(または安値)をクリック", rect: "長方形: 角をクリック", measure: "計測: 始点をクリック", text: "テキスト: 置く場所をクリック", avwap: "アンカード VWAP: 起点の足をクリック" };
   let undoStack = [], redoStack = [];
   function pushUndo() { undoStack.push(JSON.stringify(S.drawings)); if (undoStack.length > 50) undoStack.shift(); redoStack = []; syncToolbar(); }
   function undo() { if (!undoStack.length) return; redoStack.push(JSON.stringify(S.drawings)); const prev = JSON.parse(undoStack.pop()); S.drawings.splice(0, S.drawings.length, ...prev); saveDrawings(); }
@@ -607,6 +610,41 @@
     return out;
   }
 
+  // ---------- アンカード VWAP・価格帯別出来高・バリュエーションの帯の下ごしらえ ----------
+  // 直近の決算発表日の足
+  function anchorEarn(bars, cur) { if (cur.isIndex) return null; const ev = earningsEvents(cur.detail).filter((e) => e.date <= bars.at(-1).end).at(-1); return ev ? barIndexAt(bars, ev.date) : null; }
+  // 直近 1 年(日足 250 本・週足 52 本・月足 12 本)の高値 / 安値の足
+  function anchorExtreme(bars, key) {
+    const n = { "1d": 250, "1w": 52, "1mo": 12 }[S.set.interval] || 250; const from = Math.max(0, bars.length - n); let best = from;
+    for (let i = from; i < bars.length; i++) if (key === "h" ? bars[i].h > bars[best].h : bars[i].l < bars[best].l) best = i;
+    return best;
+  }
+  // 描画ツールのアンカード VWAP(起点の日付 → 折れ線の点)
+  function avwapPoints(t) {
+    const bars = S.bars || []; const i0 = barIndexAt(bars, t); if (i0 < 0) return [];
+    const key = `${S.code}${S.set.interval}${bars.length}${i0}`; avwapPoints.cache = avwapPoints.cache || new Map();
+    if (!avwapPoints.cache.has(key)) { const v = SRAna.anchoredVwap(bars, i0); avwapPoints.cache.set(key, bars.slice(i0).map((r, k) => ({ t: r.time, p: v[i0 + k] }))); if (avwapPoints.cache.size > 40) avwapPoints.cache.clear(); }
+    return avwapPoints.cache.get(key);
+  }
+  function updateProfile() {
+    if (!vpLayer || !vpLayer.visible || !S.bars?.length || !chart) { S.vp = null; vpLayer?.update(); return; }
+    const r = chart.timeScale().getVisibleLogicalRange(); const n = S.bars.length;
+    const from = r ? Math.max(0, Math.floor(r.from)) : Math.max(0, n - 160), to = r ? Math.min(n - 1, Math.ceil(r.to)) : n - 1;
+    S.vp = SRAna.volumeProfile(S.bars, from, to, 32); vpLayer.update();
+  }
+  // 1株あたりの EPS・BPS を「公表された日から有効」な列にする(分割は日足に合わせて調整)
+  const addDays = (d, k) => { const t = Date.parse(`${String(d).slice(0, 10)}T00:00:00Z`); return Number.isFinite(t) ? new Date(t + k * 864e5).toISOString().slice(0, 10) : null; };
+  function perShareSeries(cur, kind) {
+    const d = cur.detail || {}; const byFrom = new Map();
+    const put = (from, v) => { const x = num(v); if (!from || x === null) return; byFrom.set(from, x / SRCredit.splitFactor(cur.splits, from)); };
+    if (kind === "eps") mergedAnnual(d).rows.forEach((r) => put(normDate(r.announce) || addDays(r.end, 45), r.eps));
+    else {
+      const fin = d.irbank?.fin; (fin?.periods || []).forEach((p, i) => put(addDays(`${String(p).replace("/", "-")}-28`, 60), fin.values?.bps?.[i]));
+      (d.kabutan?.balance || []).forEach((b) => put(normDate(b.announce) || addDays(b.end, 45), b.bps));
+    }
+    return [...byFrom.entries()].sort().map(([from, value]) => ({ from, value }));
+  }
+
   function renderChart(keepRange) {
     const cur = S.cur; if (!cur) return;
     ensureChart();
@@ -634,12 +672,12 @@
     const hidden = new Set(S.set.hiddenInd || []);
     chart.priceScale("right", 0).applyOptions({ mode: S.compare.length ? LW.PriceScaleMode.Percentage : S.set.scale, scaleMargins: { top: 0.08, bottom: S.set.ind.includes("vol") && !hidden.has("vol") ? 0.2 : 0.06 } });
     // 描画(トレンドライン・水平線など)は主系列に付けたプリミティブで描く
-    drawLayer = drawLayer || new SRDraw.DrawingLayer({ toX: dateToX, toY: (p) => mainSeries?.priceToCoordinate(p) ?? null, fmt: fmtPrice, color: () => css("--draw"), bars: barsBetween });
+    drawLayer = drawLayer || new SRDraw.DrawingLayer({ toX: dateToX, toY: (p) => mainSeries?.priceToCoordinate(p) ?? null, fmt: fmtPrice, color: () => css("--draw"), bars: barsBetween, avwap: avwapPoints });
     mainSeries.attachPrimitive(drawLayer); drawLayer.items = S.drawings; drawLayer.hidden = !!S.set.hideDrawings; drawLayer.selected = -1; drawLayer.preview = null;
 
     const closes = bars.map((r) => r.c);
     const addLine = (values, color, extra, pane = 0) => { const s = chart.addSeries(LW.LineSeries, lineOpts(color, { priceFormat, ...extra }), pane); s.setData(bars.map((r, i) => (Number.isFinite(values[i]) ? { time: r.time, value: values[i] } : { time: r.time }))); (pane ? paneSeries : overlay).push(s); return s; };
-    const ind = S.set.ind.filter((k) => !hidden.has(k));
+    const ind = S.set.ind.filter((k) => !hidden.has(k) && !(cur.isIndex && STOCK_ONLY_IND.has(k)));
     if (ind.includes("vol")) {
       const v = chart.addSeries(LW.HistogramSeries, { priceFormat: { type: "volume" }, priceScaleId: "vol", priceLineVisible: false, lastValueVisible: false });
       v.priceScale().applyOptions({ scaleMargins: { top: 0.84, bottom: 0 } });
@@ -669,6 +707,29 @@
       s.setData(cb.filter((x) => num(x.r.buyAvgPrice) !== null && !x.r.warmup).map((x) => ({ time: x.time, value: x.r.buyAvgPrice })));
       overlay.push(s);
     }
+    if (ind.includes("sellcost") && cb.length) {
+      const s = chart.addSeries(LW.LineSeries, lineOpts(css("--credit-sell"), { lineStyle: LW.LineStyle.Dotted, lineWidth: 2, lineType: LW.LineType.WithSteps, priceFormat, lastValueVisible: true, title: "売り方平均" }));
+      s.setData(cb.filter((x) => num(x.r.sellAvgPrice) !== null && !x.r.warmup).map((x) => ({ time: x.time, value: x.r.sellAvgPrice })));
+      overlay.push(s);
+    }
+    // アンカード VWAP(決算発表日・52週高値・52週安値の足から)
+    S.avwapLines = {};
+    const anchors = { avwap_earn: anchorEarn(bars, cur), avwap_hi: anchorExtreme(bars, "h"), avwap_lo: anchorExtreme(bars, "l") };
+    Object.entries(anchors).forEach(([k, i0]) => {
+      if (!ind.includes(k) || i0 === null || i0 < 0) return;
+      const v = SRAna.anchoredVwap(bars, i0); S.avwapLines[k] = v;
+      addLine(v, IND_COLORS[k], { lineWidth: 2, lastValueVisible: true, title: { avwap_earn: "VWAP 決算", avwap_hi: "VWAP 高値", avwap_lo: "VWAP 安値" }[k] });
+    });
+    // PER・PBR バンド(実績の1株あたり × 過去の倍率の 10/50/90% 点)
+    S.bands = {};
+    [["perband", "eps", "PER"], ["pbrband", "bps", "PBR"]].forEach(([k, kind, label]) => {
+      if (!ind.includes(k) || cur.isIndex) return;
+      const band = SRAna.valuationBand(bars, perShareSeries(cur, kind), [0.1, 0.5, 0.9], priceRowsForCredit(cur)); if (!band) return; S.bands[k] = { ...band, label };
+      band.levels.forEach((lv, j) => addLine(band.values.map((x) => (x ? x * lv.mult : NaN)), alpha(IND_COLORS[k], j === 1 ? 0.95 : 0.6), { lineType: LW.LineType.WithSteps, lineStyle: j === 1 ? LW.LineStyle.Solid : LW.LineStyle.Dashed, lineWidth: j === 1 ? 2 : 1, lastValueVisible: true, title: `${label} ${lv.mult.toFixed(label === "PER" ? 1 : 2)}倍` }));
+    });
+    // 価格帯別出来高(表示している範囲で計算し直す)
+    if (!vpLayer) vpLayer = new SRDraw.VolumeProfile({ profile: () => S.vp, toY: (p) => mainSeries?.priceToCoordinate(p) ?? null, colors: () => ({ up: UP(), down: DOWN(), poc: css("--warn") }) });
+    mainSeries.attachPrimitive(vpLayer); vpLayer.visible = ind.includes("vprofile"); updateProfile();
     // 決算発表日(株探の決算・stockAI の決算発表)をローソク足の下に印で出す
     if (ind.includes("earnings")) {
       const marks = new Map();
@@ -731,7 +792,11 @@
     const bars = S.bars; const key = `${S.code}${S.set.interval}${bars.length}`;
     if (S.legendCache?.key !== key) { const closes = bars.map((b) => b.c); const bb = SRInd.bollinger(closes); S.legendCache = { key, ...Object.fromEntries(["ma5", "ma25", "ma75", "ma200"].map((m) => [m, SRInd.sma(closes, Number(m.slice(2)))])), bb }; }
     const c = S.legendCache;
-    return { ma5: fmtPrice(c.ma5[i]), ma25: fmtPrice(c.ma25[i]), ma75: fmtPrice(c.ma75[i]), ma200: fmtPrice(c.ma200[i]), bb: `${fmtPrice(c.bb.up[i])} ${fmtPrice(c.bb.mid[i])} ${fmtPrice(c.bb.lo[i])}`, vol: vol(bars[i]?.v) };
+    const out = { ma5: fmtPrice(c.ma5[i]), ma25: fmtPrice(c.ma25[i]), ma75: fmtPrice(c.ma75[i]), ma200: fmtPrice(c.ma200[i]), bb: `${fmtPrice(c.bb.up[i])} ${fmtPrice(c.bb.mid[i])} ${fmtPrice(c.bb.lo[i])}`, vol: vol(bars[i]?.v) };
+    Object.entries(S.avwapLines || {}).forEach(([k, v]) => { if (Number.isFinite(v[i])) out[k] = `${fmtPrice(v[i])}(${pct(bars[i].c / v[i] - 1)})`; });
+    Object.entries(S.bands || {}).forEach(([k, b]) => { const x = b.values[i]; out[k] = x ? `${(bars[i].c / x).toFixed(b.label === "PER" ? 1 : 2)}倍${i === bars.length - 1 && b.percentile !== null ? `(${b.n}本の分布で下から ${Math.round(b.percentile * 100)}%)` : ""}` : "—"; });
+    if (S.vp) out.vprofile = `POC ${fmtPrice(S.vp.pocPrice)} · 70%帯 ${fmtPrice(S.vp.val)}〜${fmtPrice(S.vp.vah)}`;
+    return out;
   }
   function renderLegend(time) {
     const bars = S.bars || []; if (!bars.length) return;
@@ -741,10 +806,11 @@
     const row = S.cur.row;
     const iv = { "1d": "1日", "1w": "1週", "1mo": "1か月" }[S.set.interval];
     const hidden = new Set(S.set.hiddenInd || []); const vals = indValues(i);
-    const indRows = S.set.ind.map((key) => {
+    const indRows = S.set.ind.filter((key) => !(S.cur.isIndex && STOCK_ONLY_IND.has(key))).map((key) => {
       const label = (IND_MENU.find(([x]) => x === key) || [key, key])[1].replace("移動平均 ", "MA ").replace("ボリンジャーバンド 20, 2σ", "BB 20 2");
+      const short = { avwap_earn: "AVWAP 決算発表から", avwap_hi: "AVWAP 52週高値から", avwap_lo: "AVWAP 52週安値から", perband: "PER バンド", pbrband: "PBR バンド", vprofile: "価格帯別出来高", avgcost: "信用買い方 平均単価", sellcost: "信用売り方 平均単価", earnings: "決算発表日" }[key];
       const v = vals[key] ? ` <b style="color:${IND_COLORS[key]}">${vals[key]}</b>` : "";
-      return `<div class="lg-ind ${hidden.has(key) ? "off" : ""}"><span>${esc(label)}</span>${hidden.has(key) ? "" : v}<span class="lg-btns"><button type="button" data-lg-eye="${key}" title="表示/非表示">👁</button><button type="button" data-lg-del="${key}" title="外す">✕</button></span></div>`;
+      return `<div class="lg-ind ${hidden.has(key) ? "off" : ""}"><span>${esc(short || label)}</span>${hidden.has(key) ? "" : v}<span class="lg-btns"><button type="button" data-lg-eye="${key}" title="表示/非表示">👁</button><button type="button" data-lg-del="${key}" title="外す">✕</button></span></div>`;
     }).join("");
     const cmp = S.compare.map((c, n) => { const rr = c.bars ? c.bars.filter((b) => b.d <= r.end).at(-1) : null; return `<div class="lg-ind"><span style="color:${COMPARE_COLORS[n % COMPARE_COLORS.length]}">● ${esc(c.label)}</span> <b>${rr ? fmtPrice(rr.c) : "—"}</b><span class="lg-btns"><button type="button" data-lg-cmp="${n}" title="比較を外す">✕</button></span></div>`; }).join("");
     // その足の時点の最新の信用残
@@ -880,7 +946,7 @@
   // =====================================================================
   // 下段のタブ(信用残・株探/IRBANK の企業データ)
   // =====================================================================
-  const BOTTOM_TABS = [["credit", "信用残・金額・評価損益"], ["perf", "業績"], ["quarter", "四半期"], ["fin", "財務"], ["ind", "指標"], ["val", "株価指標"], ["div", "配当"], ["seg", "セグメント"], ["peers", "競合"], ["earn", "決算発表"], ["edinet", "有報"], ["people", "人的資本"], ["profile", "会社情報"], ["saved", "株探・IRBANK 保存"]];
+  const BOTTOM_TABS = [["credit", "信用残・金額・評価損益"], ["risk", "感応度・リスク"], ["progress", "決算進捗"], ["perf", "業績"], ["quarter", "四半期"], ["fin", "財務"], ["ind", "指標"], ["val", "株価指標"], ["div", "配当"], ["seg", "セグメント"], ["peers", "競合"], ["earn", "決算発表"], ["quality", "財務の質"], ["edinet", "有報"], ["people", "人的資本"], ["profile", "会社情報"], ["saved", "株探・IRBANK 保存"]];
   function renderBottom() {
     const tabs = $("#bottomTabs"); const cur = S.cur;
     const set = cur?.isIndex ? INDEX_TABS : BOTTOM_TABS; const kind = cur?.isIndex ? "index" : "stock";
@@ -892,13 +958,17 @@
     const active = cur?.isIndex ? (INDEX_TABS.some(([k]) => k === S.set.indexTab) ? S.set.indexTab : "istats") : S.set.bottomTab;
     $$("[data-btab]").forEach((b) => b.classList.toggle("active", b.dataset.btab === active));
     const body = $("#bottomBody"); if (!cur) return;
+    miniCharts.forEach((c) => { try { c.remove(); } catch { /* */ } }); miniCharts = []; pendingMini = [];
+    const mountMini = () => { const list = pendingMini; pendingMini = []; list.forEach(([id, build]) => { const el = document.getElementById(id); if (el) try { build(el); } catch (e) { console.error(e); } }); };
     if (cur.isIndex) {
-      try { body.innerHTML = ({ istats: tabIdxStats, mcredit: tabMarketCredit, flows: tabFlows, breadth: tabBreadth, msaved: tabMarketSaved }[active])(cur); } catch (e) { console.error(e); body.innerHTML = `<p class="muted pad">表示できませんでした: ${esc(e.message)}</p>`; }
+      try { body.innerHTML = ({ istats: tabIdxStats, supply: tabSupply, mcredit: tabMarketCredit, flows: tabFlows, breadth: tabBreadth, msaved: tabMarketSaved }[active])(cur); } catch (e) { console.error(e); body.innerHTML = `<p class="muted pad">表示できませんでした: ${esc(e.message)}</p>`; }
       $$("[data-savedsrc]", body).forEach((b) => b.addEventListener("click", () => { S.savedSrc = b.dataset.savedsrc; S.irPage = null; renderBottom(); }));
       $$("[data-irpage]", body).forEach((b) => b.addEventListener("click", () => { S.irPage = b.dataset.irpage; renderBottom(); }));
+      $$("[data-load-universe]", body).forEach((b) => b.addEventListener("click", loadUniverse));
+      mountMini();
       return;
     }
-    const fn = { credit: tabCredit, perf: tabPerf, quarter: tabQuarter, fin: tabFin, ind: tabInd, val: tabVal, div: tabDiv, seg: tabSeg, peers: tabPeers, earn: tabEarn, edinet: tabEdinet, people: tabPeople, profile: tabProfile, saved: tabSaved }[S.set.bottomTab] || tabCredit;
+    const fn = { credit: tabCredit, risk: tabRisk, progress: tabProgress, quality: tabQuality, perf: tabPerf, quarter: tabQuarter, fin: tabFin, ind: tabInd, val: tabVal, div: tabDiv, seg: tabSeg, peers: tabPeers, earn: tabEarn, edinet: tabEdinet, people: tabPeople, profile: tabProfile, saved: tabSaved }[S.set.bottomTab] || tabCredit;
     const d = cur.detail || {};
     try { body.innerHTML = fn(d, cur); } catch (e) { console.error(e); body.innerHTML = `<p class="muted pad">表示できませんでした: ${esc(e.message)}</p>`; }
     $$("[data-method]", body).forEach((b) => b.addEventListener("click", () => { S.set.creditMethod = b.dataset.method; saveSettings(); computeEst(cur); renderChart(true); renderSymCard(); renderBottom(); }));
@@ -908,9 +978,29 @@
     $$("[data-irpage]", body).forEach((b) => b.addEventListener("click", () => { S.irPage = b.dataset.irpage; renderBottom(); }));
     $$("[data-savedsrc]", body).forEach((b) => b.addEventListener("click", () => { S.savedSrc = b.dataset.savedsrc; S.irPage = null; renderBottom(); }));
     $$("[data-code]", body).forEach((b) => b.addEventListener("click", () => goChart(b.dataset.code)));
+    $$("[data-load-universe]", body).forEach((b) => b.addEventListener("click", loadUniverse));
+    $$("[data-expby]", body).forEach((b) => b.addEventListener("click", () => { S.expBy = b.dataset.expby; renderBottom(); }));
+    $$("[data-progkey]", body).forEach((b) => b.addEventListener("click", () => { S.progKey = b.dataset.progkey; renderBottom(); }));
+    mountMini();
+  }
+  // 下段の小さなチャート(タブを描き直すたびに作り直す)
+  let miniCharts = [], pendingMini = [];
+  function mini(id, height, build) {
+    pendingMini.push([id, (el) => {
+      const c = LW.createChart(el, { autoSize: true, ...chartTheme(), localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, leftPriceScale: { visible: false, borderColor: css("--tv-border") }, handleScroll: false, handleScale: false });
+      miniCharts.push(c); build(c); c.timeScale().fitContent();
+    }]);
+    return `<div id="${id}" class="mini-chart" style="height:${height}px"></div>`;
+  }
+  // 全銘柄の株価・信用残(ランキングと同じ読み込み)。相対力の順位・市場の騰落に使う
+  async function loadUniverse() {
+    if (S.rankData) return S.rankData;
+    toast("全銘柄の株価・信用残を読み込んでいます…");
+    S.rankData = await loadRankData(); S.rank = computeRank(S.rankData);
+    renderBottom(); return S.rankData;
   }
   const empty = (msg) => `<div class="empty">${esc(msg)}</div>`;
-  const INDEX_TABS = [["istats", "指数の統計"], ["mcredit", "市場の信用残"], ["flows", "投資部門別売買"], ["breadth", "騰落・業種"], ["msaved", "株探・IRBANK 保存(市場)"]];
+  const INDEX_TABS = [["istats", "指数の統計"], ["supply", "市場の需給"], ["mcredit", "市場の信用残"], ["flows", "投資部門別売買"], ["breadth", "騰落・業種"], ["msaved", "株探・IRBANK 保存(市場)"]];
   function tabIdxStats(cur) {
     const p = cur.idx; const st = p.stats || {};
     const item = (l, v, n = "") => `<div><dt>${l}</dt><dd>${v}</dd>${n ? `<small>${n}</small>` : ""}</div>`;
@@ -976,13 +1066,214 @@
     const methods = seg([["fifo6m", "先入れ先出し+6か月期日"], ["avg", "移動平均法"]], est.method, "method");
     const sources = [...new Set(rows.map((r) => r.source).filter(Boolean))];
     const table = `<div class="table-wrap tall"><table class="grid"><thead><tr><th>申込日</th><th>終値</th><th>売残(株)</th><th>前回比</th><th>買残(株)</th><th>前回比</th><th>信用倍率</th><th>売残金額</th><th>買残金額</th><th>買−売 金額</th><th>推定 買い方<br>評価損益率</th><th>推定 売り方<br>評価損益率</th><th>買い方<br>推定取得単価</th><th>買残/出来高</th><th>出典</th></tr></thead><tbody>${[...rows, ...(cur.errata || []).map((r) => ({ ...r, errata: CREDIT_ERRATA[r.date] }))].sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => r.errata ? `<tr class="errata"><th>${esc(r.date)}</th><td>—</td><td>${fmt(r.sell)}</td><td>—</td><td>${fmt(r.buy)}</td><td>—</td><td>${fmt(r.ratio, 2)}</td><td colspan="7" class="left">⚠ ${esc(r.errata)}</td><td><small>${esc(r.source || "")}</small></td></tr>` : `<tr class="${r.warmup ? "warm" : ""}"><th>${esc(r.date)}</th><td>${fmtPrice(r.closeRaw)}</td><td>${fmt(r.sell)}</td><td>${diffCell(r.sellChg)}</td><td>${fmt(r.buy)}</td><td>${diffCell(r.buyChg)}</td><td>${fmt(r.ratio, 2)}</td><td>${oku(r.sellAmount)}</td><td>${oku(r.buyAmount)}</td><td class="${cls(r.netAmount)}">${oku(r.netAmount)}</td><td class="${cls(r.buyPnl)}">${pct(r.buyPnl)}</td><td class="${cls(r.sellPnl)}">${pct(r.sellPnl)}</td><td>${fmtPrice(r.buyAvgPrice === null ? null : r.buyAvgPrice * r.priceFactor)}</td><td>${fmt(r.buyDays, 1)}日</td><td><small>${esc(r.source || "")}</small></td></tr>`).join("")}</tbody></table></div>`;
-    return `${cards}<div class="row-head"><h3>信用残の全履歴(${rows.length}回)</h3>${methods}<button type="button" class="btn" data-csv>CSV で保存</button></div>${table}
+    return `${cards}${creditExpiry(cur)}<div class="row-head"><h3>信用残の全履歴(${rows.length}回)</h3>${methods}<button type="button" class="btn" data-csv>CSV で保存</button></div>${table}
       <p class="foot">金額 = 残高 × 申込日の終値(実際の株価。分割前は分割前の株価)。推定評価損益率は残高の増減と期間 VWAP から取得コストを追った推定値で、薄い行は履歴の最初の半年(推定が不安定)。${est.unadjusted ? "この銘柄の信用残は株式分割で未調整と判定したので、分割比率で揃えて計算しています。" : ""}出典: ${esc(sources.join(" / "))}(〜2026-09 は週次、2026-09-25 申込分から JPX の日次)。${(cur.errata || []).length ? ` ⚠ の行は ${esc(cur.errata.map((r) => r.date).join("・"))} の公表ミスで、前回比・金額・評価損益率の計算から外しています。` : ""}</p>`;
   }
   function creditCsv(cur) {
     const head = ["申込日", "終値", "売残", "売残前回比", "買残", "買残前回比", "信用倍率", "売残金額(円)", "買残金額(円)", "推定買い方評価損益率", "推定売り方評価損益率", "買い方推定取得単価", "買残/20日出来高", "出典", "推定方法"];
     const lines = [csvLine(head), ...cur.est.rows.map((r) => csvLine([r.date, r.closeRaw, r.sell, r.sellChg, r.buy, r.buyChg, r.ratio?.toFixed(4), Math.round(r.sellAmount ?? 0), Math.round(r.buyAmount ?? 0), r.buyPnl?.toFixed(5), r.sellPnl?.toFixed(5), r.buyAvgPrice === null ? "" : (r.buyAvgPrice * r.priceFactor).toFixed(2), r.buyDays?.toFixed(2), r.source, cur.est.method]))];
     download(`${cur.code}_credit.csv`, lines.join("\n"));
+  }
+
+  // ---------- 信用期日の到来予定(推定) ----------
+  // 先入れ先出しで残った建玉に「建てた日 + 6か月」の期日を当てて集計する。制度信用の買い方は期日までに返済(売り)、
+  // 売り方は買い戻しが要るので、期日が集中する月は需給の節目になりやすい
+  function fifoEst(cur) {
+    if (cur.est.method === "fifo6m") return cur.est;
+    if (!cur.estFifo) cur.estFifo = SRCredit.estimateCredit(cur.credit, priceRowsForCredit(cur), cur.splits, { method: "fifo6m" });
+    return cur.estFifo;
+  }
+  function expiryWithin(est, price, days) {
+    const last = est.rows.at(-1); if (!last) return null;
+    const first = est.rows[0]?.date; const lim = addDays(last.date, days);
+    const sum = (lots) => {
+      const known = (lots || []).filter((l) => l.built !== first && l.shares > 0); const total = (lots || []).reduce((p, l) => p + (l.shares > 0 ? l.shares : 0), 0);
+      const g = SRCredit.expirySchedule(known, price, last.date, "week").filter((x) => x.first <= lim);
+      const sh = g.reduce((p, x) => p + x.shares, 0), cost = g.reduce((p, x) => p + x.cost, 0);
+      return { shares: sh, amount: price === null ? null : sh * price, share: total ? sh / total : null, avgPrice: sh ? cost / sh : null, pnl: cost ? sh * price / cost - 1 : null, unknown: (lots || []).filter((l) => l.built === first).reduce((p, l) => p + l.shares, 0) };
+    };
+    return { buy: sum(est.buyLots), sell: sum(est.sellLots), asOf: last.date };
+  }
+  function creditExpiry(cur) {
+    const est = fifoEst(cur); const last = est.rows.at(-1); if (!last || cur.isIndex) return "";
+    const price = cur.daily.at(-1)?.c ?? last.close; if (price === null) return "";
+    const by = S.expBy === "week" ? "week" : "month"; const first = est.rows[0]?.date;
+    const B = SRCredit.expirySchedule(est.buyLots, price, last.date, by, first), Sx = SRCredit.expirySchedule(est.sellLots, price, last.date, by, first);
+    const w = expiryWithin(est, price, 91);
+    const keys = [...new Set([...B, ...Sx].map((g) => g.key))].sort();
+    const bk = new Map(B.map((g) => [g.key, g])), sk = new Map(Sx.map((g) => [g.key, g]));
+    const card = (label, x, side) => `<article><span>${label}</span><strong>${oku(x.amount)}<small>円</small></strong><em>${fmt(x.shares)}株 · ${side}残の ${x.share === null ? "—" : `${Math.round(x.share * 100)}%`} · 推定${side === "買" ? "取得" : "売り"}単価 ${fmtPrice(x.avgPrice)}円 · <b class="${cls(side === "買" ? x.pnl : -x.pnl)}">${side === "買" ? pct(x.pnl) : pct(x.pnl === null ? null : -x.pnl)}</b></em></article>`;
+    const cell = (g, side) => (g ? `<td>${fmt(g.shares)}</td><td>${oku(g.amount)}</td><td>${fmtPrice(g.avgPrice)}</td><td class="${cls(side === "b" ? g.pnl : -g.pnl)}">${side === "b" ? pct(g.pnl) : pct(g.pnl === null ? null : -g.pnl)}</td>` : "<td>—</td><td>—</td><td>—</td><td>—</td>");
+    return `<div class="row-head"><h3>信用期日の到来予定(推定)</h3>${seg([["month", "月ごと"], ["week", "週ごと"]], by, "expby")}<small>${esc(last.date)} 申込分の残高から</small></div>
+      <div class="cards">${card("3か月以内に期日を迎える買い建玉", w.buy, "買")}${card("3か月以内に期日を迎える売り建玉", w.sell, "売")}</div>
+      ${barSvg(B.slice(0, 14).map((g) => ({ label: by === "week" ? g.key.slice(5) : g.key.slice(2).replace("-", "."), value: g.amount === null ? null : g.amount / 1e8 })), "期日を迎える買い建玉の金額(億円)")}
+      <div class="table-wrap"><table class="grid"><thead><tr><th rowspan="2">${by === "week" ? "週(金曜)" : "月"}</th><th colspan="4">買い建玉(返済売りの候補)</th><th colspan="4">売り建玉(買い戻しの候補)</th></tr><tr><th>株数</th><th>金額</th><th>推定取得単価</th><th>評価損益</th><th>株数</th><th>金額</th><th>推定売り単価</th><th>評価損益</th></tr></thead><tbody>${keys.map((k) => `<tr><th>${esc(k)}</th>${cell(bk.get(k), "b")}${cell(sk.get(k), "s")}</tr>`).join("") || '<tr><td colspan="9" class="muted">期日が分かる建玉はありません</td></tr>'}</tbody></table></div>
+      <p class="foot">推定です。週ごとの残高の増減しか分からないため、増えた分を「その週に建った」、減った分を「古い建玉から返済された」とみなし(先入れ先出し)、建てた日 + 6か月(182日)を期日としています。期日を過ぎても残っている分は、期日の終値で乗り換えたとみなして次の期日に送っています。一般信用(期日なし・無期限)と制度信用の区別はできません。評価損益は現在値(${fmtPrice(price)}円)での値。履歴の最初の残高${w.buy.unknown ? `(買い ${fmt(w.buy.unknown)}株` : ""}${w.sell.unknown ? `${w.buy.unknown ? " / " : "("}売り ${fmt(w.sell.unknown)}株` : ""}${w.buy.unknown || w.sell.unknown ? ")" : ""}は建てた日が分からないので除いています。</p>`;
+  }
+
+  // ---------- 決算の進捗率 ----------
+  function tabProgress(d) {
+    const pr = SRAna.progressTable(d.kabutan);
+    if (!pr.years.length) return empty("四半期の業績データが無いので、進捗率を出せません。");
+    const has = (k) => pr.years.some((y) => y.steps.some((x) => x[`${k}P`] !== null));
+    const keys = SRAna.PROGRESS_KEYS.filter(([k]) => has(k));
+    const key = keys.some(([k]) => k === S.progKey) ? S.progKey : (keys.find(([k]) => k === "op") || keys[0] || ["op"])[0];
+    const curY = pr.years.filter((y) => y.forecast).at(-1) || pr.years.at(-1); const st = curY.steps.at(-1);
+    const card = ([k, label]) => {
+      const v = st[`${k}P`]; const avg = pr.pastAvg(st.n, k); const diff = v !== null && avg ? v - avg.mean : null;
+      return `<article><span>${label}の進捗(${esc(curY.period)}${curY.forecast ? " 会社予想" : " 実績"}に対して)</span><strong class="${cls(diff)}">${v === null ? "—" : `${(v * 100).toFixed(1)}<small>%</small>`}</strong><em>第${st.n}四半期まで · 目安 ${st.n * 25}% · 過去の同時期 ${avg ? `${(avg.mean * 100).toFixed(1)}%(${avg.n}年平均)` : "—"}${diff === null ? "" : ` · 差 <b class="${cls(diff)}">${diff >= 0 ? "+" : ""}${(diff * 100).toFixed(1)}pt</b>`}</em></article>`;
+    };
+    const head = [1, 2, 3, 4].map((n) => `<th>第${n}四半期まで</th>`).join("");
+    const rows = pr.years.slice().reverse().map((y) => `<tr class="${y.forecast ? "fc" : ""}"><th>${y.forecast ? '<i class="tag">予</i>' : ""}${esc(y.period)}<small>通期 ${mil(y.full[key])}</small></th>${[1, 2, 3, 4].map((n) => { const x = y.steps.find((q) => q.n === n); if (!x) return "<td>—</td>"; const v = x[`${key}P`], avg = pr.pastAvg(n, key); return `<td>${v === null ? "—" : `<b>${(v * 100).toFixed(1)}%</b>`}<small>${mil(x[key])}${!y.forecast || !avg ? "" : ` · 過去 ${(avg.mean * 100).toFixed(0)}%`}</small></td>`; }).join("")}</tr>`).join("");
+    const kabRef = [...(d.kabutan?.q1cum || []), ...(d.kabutan?.half || [])].filter((r) => num(r.progress) !== null).sort((a, b) => (a.end < b.end ? 1 : -1));
+    const ind = d.irbank?.ind; const habit = ["actual_above_initial_ratio_sales", "actual_above_initial_ratio_operating_income", "actual_above_initial_ratio_net_income", "upward_revision_ratio_operating_income", "downward_revision_ratio_operating_income", "initial_forecast_deviation_operating_income", "initial_forecast_deviation_std_operating_income", "total_revision_count", "annual_revision_count", "revision_year_end_concentration"].filter((k) => ind?.values?.[k]);
+    return `<div class="cards">${keys.map(card).join("")}</div>
+      <div class="row-head"><h3>累計の進捗率(四半期ごと)</h3>${seg(keys.map(([k, l]) => [k, l]), key, "progkey")}<small>累計 ÷ 通期(実績の年は実績、今期は会社予想)。金額は百万円</small></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>決算期</th>${head}</tr></thead><tbody>${rows}</tbody></table></div>
+      ${kabRef.length ? `<p class="foot">株探が出している進捗率(累計 ÷ その時点の会社予想): ${kabRef.map((r) => `${esc(r.period)} ${num(r.progress).toFixed(1)}%`).join(" / ")}</p>` : ""}
+      ${habit.length ? `<div class="row-head"><h3>会社予想のクセ(IRBANK)</h3><small>期初予想に対して実績が上回った割合・修正の回数など。保守的に予想を出す会社は、進捗が目安を上回りやすい</small></div>${periodGrid(ind, habit, "ind")}` : ""}
+      <p class="foot">目安の 25/50/75% は売上・利益が四半期で均等なときの値です。季節性のある会社(年度末に偏る・上期に偏る)は、過去の同じ時期の自社の進捗率と比べてください。株探の四半期データがある年度だけ計算しています(過去の年数が少ないと平均の当てにならない点に注意)。</p>`;
+  }
+
+  // ---------- 感応度・リスク ----------
+  const idxRows = (id) => (S.idxById?.get(id)?.points || []).map((a) => ({ d: a[0], o: a[1], h: a[2], l: a[3], c: a[4] }));
+  function tabRisk(d, cur) {
+    const daily = cur.daily; if (daily.length < 60) return empty("日足が少ないので計算できません。");
+    if (!cur.sens) cur.sens = SRAna.sensitivity(daily, { tpx: idxRows("TPX"), fx: idxRows("USDJPY"), tnx: idxRows("TNX") });
+    const sens = cur.sens; const m = sens.windows.find((x) => x.w === 250)?.fit || sens.windows.find((x) => x.fit)?.fit;
+    const risk = SRAna.riskStats(daily); const usd = idxRows("USDJPY").at(-1)?.c;
+    const tpx = idxRows("TPX"); const rel = (days) => { const a = SRAna.retOver(daily, days); const tl = tpx.filter((r) => r.d <= daily.at(-1).d); const b = SRAna.retOver(tl, days); return a === null || b === null ? null : { a, b, x: (1 + a) / (1 + b) - 1 }; };
+    const rs = SRAna.rsScore(daily); let rsPct = null;
+    if (S.rank) { const all = S.rank.map((x) => x.rs).filter((x) => x !== null && x !== undefined).sort((a, b) => a - b); if (rs !== null && all.length) rsPct = all.filter((x) => x <= rs).length / all.length; }
+    const tv = (c) => (c?.t === null || c?.t === undefined ? "" : `t=${c.t.toFixed(1)}${Math.abs(c.t) >= 2 ? "" : "(有意でない)"}`);
+    const card = (label, v, sub, c = "") => `<article><span>${label}</span><strong class="${c}">${v}</strong><em>${sub}</em></article>`;
+    const cards = m ? `<div class="cards">
+      ${card("β(TOPIX)", m.beta.b.toFixed(2), `TOPIX が 1% 動くと ${m.beta.b.toFixed(2)}% · 250日 · ${tv(m.beta)}`)}
+      ${card("為替感応度(ドル円)", `${m.fx.b >= 0 ? "+" : ""}${m.fx.b.toFixed(2)}`, `ドル円 +1%(円安)で ${m.fx.b >= 0 ? "+" : ""}${m.fx.b.toFixed(2)}%${usd ? ` · 1円の円安で約 ${(m.fx.b * 100 / usd).toFixed(2)}%` : ""} · ${tv(m.fx)}`, cls(m.fx.b))}
+      ${card("金利感応度(米10年債)", `${m.rate.b * 10 >= 0 ? "+" : ""}${(m.rate.b * 10).toFixed(2)}%`, `米10年債利回り +0.1%pt で · ${tv(m.rate)}`, cls(m.rate.b))}
+      ${card("市場・為替・金利で説明できる割合", `${Math.round(m.r2 * 100)}<small>%</small>`, `決定係数 R² · ${m.n}日(${esc(m.from)}〜)`)}
+    </div>` : "";
+    const wl = (w) => (w === Infinity ? "全期間" : `${w}日`);
+    const table = `<div class="table-wrap"><table class="grid"><thead><tr><th>期間</th><th>β(TOPIX)</th><th>為替 ドル円 +1%</th><th>金利 +0.1%pt</th><th>R²</th><th>年率ボラ</th><th>日数</th></tr></thead><tbody>${sens.windows.filter((x) => x.fit).map(({ w, fit }) => `<tr><th>${wl(w)}</th><td>${fit.beta.b.toFixed(2)}<small>${tv(fit.beta)}</small></td><td class="${cls(fit.fx.b)}">${fit.fx.b >= 0 ? "+" : ""}${fit.fx.b.toFixed(2)}%<small>${tv(fit.fx)}</small></td><td class="${cls(fit.rate.b)}">${(fit.rate.b * 10 >= 0 ? "+" : "")}${(fit.rate.b * 10).toFixed(2)}%<small>${tv(fit.rate)}</small></td><td>${Math.round(fit.r2 * 100)}%</td><td>${(fit.vol * 100).toFixed(1)}%</td><td>${fit.n}</td></tr>`).join("")}</tbody></table></div>`;
+    const roll = sens.roll.length > 2 ? mini("miniFxRoll", 180, (c) => {
+      const pf = { type: "price", precision: 2, minMove: 0.01 };
+      const a = c.addSeries(LW.LineSeries, { color: "#ff9800", lineWidth: 2, title: "為替感応度", priceFormat: pf }); a.setData(sens.roll.map((x) => ({ time: x.d, value: x.fx })));
+      const b = c.addSeries(LW.LineSeries, { color: "#2962ff", lineWidth: 1, title: "β", priceFormat: pf }); b.setData(sens.roll.map((x) => ({ time: x.d, value: x.beta })));
+      a.createPriceLine({ price: 0, color: css("--tv-grid2"), lineWidth: 1, axisLabelVisible: false });
+    }) : "";
+    const relRows = [[21, "1か月"], [63, "3か月"], [126, "6か月"], [250, "1年"]].map(([n, l]) => { const r = rel(n); return `<tr><th>${l}</th><td>${pctCell(r?.a)}</td><td>${pctCell(r?.b)}</td><td>${pctCell(r?.x)}</td></tr>`; }).join("");
+    const riskGrid = risk ? `<dl class="metrics"><div><dt>年率ボラティリティ</dt><dd>${(risk.vol250 * 100).toFixed(1)}%</dd><small>20日 ${(risk.vol20 * 100).toFixed(1)}% · 60日 ${(risk.vol60 * 100).toFixed(1)}%</small></div><div><dt>下方ボラティリティ</dt><dd>${risk.downVol === null ? "—" : `${(risk.downVol * 100).toFixed(1)}%`}</dd><small>下落した日だけで計算</small></div><div><dt>1年の最大下落</dt><dd class="down">${pct(risk.mdd250)}</dd></div><div><dt>52週高値から</dt><dd class="${cls(risk.fromHigh)}">${pct(risk.fromHigh)}</dd><small>高値 ${fmtPrice(risk.hi52)}</small></div><div><dt>52週安値から</dt><dd class="${cls(risk.fromLow)}">${pct(risk.fromLow)}</dd><small>安値 ${fmtPrice(risk.lo52)}</small></div><div><dt>RS スコア</dt><dd>${rs === null ? "—" : pct(rs)}</dd><small>${rsPct === null ? '<button type="button" class="link" data-load-universe>全銘柄の中の順位を出す ›</button>' : `対象銘柄の中で上位 ${Math.max(1, Math.round((1 - rsPct) * 100))}%`}</small></div></dl>` : "";
+    return `${cards}<div class="row-head"><h3>期間ごとの感応度</h3><small>日次リターンの重回帰(TOPIX・ドル円・米10年債)。ドル円と米金利は東証の引け後に動く分を拾うため、当日と前日の係数を足しています</small></div>${table}
+      ${roll ? `<div class="row-head"><h3>感応度の推移(250日の窓)</h3></div>${roll}` : ""}
+      <div class="row-head"><h3>リスクと相対力</h3></div>${riskGrid}
+      <div class="table-wrap"><table class="grid"><thead><tr><th>期間</th><th>この銘柄</th><th>TOPIX</th><th>TOPIX との差(相対力)</th></tr></thead><tbody>${relRows}</tbody></table></div>
+      <p class="foot">為替感応度 = ドル円が 1% 円安になったときに株価が何 % 動くか(TOPIX の動きを除いた分)。プラスは円安で上がる(輸出型)、マイナスは円高で上がる(輸入・内需型)。金利感応度は米10年債利回りが 0.1%pt 上がったとき。t の絶対値が 2 未満は統計的にはっきりしない値です。RS スコアは IBD の RS レーティングと同じ重み(3か月 40%・6/9/12か月 各20%)。日足は ${esc(daily[0].d)} から。</p>`;
+  }
+
+  // ---------- 財務の質 ----------
+  function tabQuality(d, cur) {
+    const fin = d.irbank?.fin; if (!fin?.periods?.length) return empty("通期の財務データ(IRBANK)が無いので計算できません。");
+    const prices = priceRowsForCredit(cur);
+    const priceAtRaw = (date) => { let c = null; for (const r of prices) { if (r.d <= date) c = r.c; else break; } return c === null ? null : c * SRCredit.splitFactor(cur.splits, date); };
+    const rows = SRAna.qualityTable(fin, d.irbank?.ind, priceAtRaw);
+    const last = rows.at(-1); const price = cur.daily.at(-1)?.c; const shares = num(d.irbank?.security?.issued_shares);
+    // いまの時価総額での清原式ネットキャッシュ比率(直近の決算の流動資産・負債)
+    const iL = fin.periods.length - 1; const ca = num(fin.values?.current_assets?.[iL]), tl = num(fin.values?.total_liabilities?.[iL]);
+    const ncrNow = ca !== null && tl !== null && price && shares ? (ca - tl) / (price * shares) : null;
+    const card = (label, v, sub, c = "") => `<article><span>${label}</span><strong class="${c}">${v}</strong><em>${sub}</em></article>`;
+    const fs = last.fscore, z = last.z;
+    const cards = `<div class="cards">
+      ${card("ピオトロスキーの F スコア", fs === null ? "—" : `${fs}<small>/ 9</small>`, `${esc(fy(last.period))} · 8〜9 は財務が良化、0〜2 は悪化`, fs === null ? "" : fs >= 7 ? "up" : fs <= 2 ? "down" : "")}
+      ${card("アルトマンの Z スコア", z === null ? "—" : z.toFixed(2), "2.99 超は安全域、1.81 未満は危険域(製造業の基準・金融業には当てはまらない)", z === null ? "" : z >= 2.99 ? "up" : z < 1.81 ? "down" : "")}
+      ${card("清原式ネットキャッシュ比率(現在)", ncrNow === null ? "—" : ncrNow.toFixed(2), "(流動資産 − 負債合計)÷ 時価総額。1 を超えると時価総額より正味の資産が多い", ncrNow === null ? "" : ncrNow >= 1 ? "up" : "")}
+      ${card("ROIC", last.roic === null ? "—" : `${last.roic.toFixed(1)}<small>%</small>`, `ROE ${last.roe === null ? "—" : `${last.roe.toFixed(1)}%`} · ROA ${last.roa === null ? "—" : `${last.roa.toFixed(1)}%`}`)}
+    </div>`;
+    const f1 = (v, d1 = 1, suf = "") => (v === null || v === undefined ? "—" : `${v.toFixed(d1)}${suf}`);
+    const lines = [
+      ["F スコア", (r) => (r.fscore === null ? "—" : `${r.fscore}`), "収益性・財務の安全性・効率の 9 項目で、前期より良くなった数(Piotroski 2000)"],
+      ["Z スコア", (r) => f1(r.z, 2), "1.2×運転資本/総資産 + 1.4×利益剰余金/総資産 + 3.3×EBIT/総資産 + 0.6×時価総額/負債 + 1.0×売上/総資産"],
+      ["Zmijewski スコア", (r) => f1(r.zmij, 2), "0 を超えると倒産確率が 50% 超と判定される(IRBANK)"],
+      ["清原式ネットキャッシュ比率", (r) => f1(r.ncr, 2), "期末の時価総額で計算。投資有価証券はデータが無いので含めない(控えめな値)"],
+      ["ネットキャッシュ ÷ 時価総額", (r) => (r.netCashToMcap === null ? "—" : pct(r.netCashToMcap)), "(現金同等物 − 有利子負債)÷ 時価総額"],
+      ["Sloan 比率(発生主義の利益)", (r) => f1(r.sloan, 1, "%"), "利益のうち現金の裏付けが無い部分の大きさ。絶対値が大きい(目安 ±10% 超)と利益の質に注意(IRBANK)"],
+      ["(純利益 − 営業CF)÷ 総資産", (r) => (r.accrualCf === null ? "—" : pct(r.accrualCf)), "プラスが大きいほど、利益に対して現金が入っていない"],
+      ["ROIC", (r) => f1(r.roic, 1, "%"), "投下資本利益率"], ["ROE", (r) => f1(r.roe, 1, "%"), ""], ["ROA", (r) => f1(r.roa, 1, "%"), ""],
+      ["CCC(日)", (r) => f1(r.ccc, 0), "キャッシュ・コンバージョン・サイクル(売上債権 + 在庫 − 仕入債務 の日数)"],
+      ["自己資本比率", (r) => f1(r.equityRatio, 1, "%"), ""], ["フリーCF", (r) => (r.fcf === null ? "—" : oku(r.fcf)), ""],
+      ["グレアム数", (r) => (r.graham === null ? "—" : fmtPrice(r.graham)), "√(22.5 × EPS × BPS)。株価がこれを下回るとグレアムの基準で割安"],
+      ["期末の時価総額", (r) => oku(r.mcap), "期末月の終値 × (発行済株式数 − 自己株式)"],
+    ];
+    const table = `<div class="table-wrap"><table class="grid period"><thead><tr><th>項目</th>${rows.map((r) => `<th>${esc(fy(r.period))}</th>`).join("")}</tr></thead><tbody>${lines.map(([l, f, note]) => `<tr><th title="${esc(note)}">${esc(l)}</th>${rows.map((r) => `<td>${f(r)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+    return `${cards}<div class="row-head"><h3>決算期ごとの財務の質</h3><small>IRBANK の通期データから計算(項目名にマウスを乗せると説明)</small></div>${table}
+      <p class="foot">F スコア・Sloan 比率・Zmijewski スコア・グレアム数・ROIC・CCC は IRBANK の計算値、Z スコア・ネットキャッシュ比率は IRBANK の財務と期末の株価から計算しています。銀行・証券・保険は財務の形が違うため、Z スコアやネットキャッシュ比率は意味を持ちません。</p>`;
+  }
+
+  // ---------- 権利落ちの値動き ----------
+  function exDividendSection(d, cur) {
+    const fyEnd = num(d.irbank?.security?.fiscal_year_end_month); if (!fyEnd) return "";
+    const midM = ((fyEnd + 5) % 12) + 1; const ev = SRAna.exDividendEvents(cur.daily, [fyEnd, midM]); if (!ev.length) return "";
+    const tpx = idxRows("TPX"); const tAt = (date) => { let c = null; for (const r of tpx) { if (r.d <= date) c = r.c; else break; } return c; };
+    const fin = d.irbank?.fin; const pIdx = (y, m) => (fin?.periods || []).indexOf(`${y}/${String(m).padStart(2, "0")}`);
+    const dpsFor = (ym) => {
+      const [y, m] = ym.split("-").map(Number);
+      if (m === fyEnd) { const i = pIdx(y, fyEnd); return i < 0 ? null : num(fin.values?.dps_year_end?.[i]); }
+      const t = new Date(Date.UTC(y, m - 1 + 6, 1)); const i = pIdx(t.getUTCFullYear(), t.getUTCMonth() + 1); return i < 0 ? null : num(fin.values?.dps_q2?.[i]);
+    };
+    const list = ev.map((e) => {
+      const a = tAt(e.cumDate), b = tAt(e.exDate); const mkt = a && b ? b / a - 1 : null;
+      const dps = dpsFor(e.month); const raw = e.cumClose * SRCredit.splitFactor(cur.splits, e.cumDate);
+      const y = dps !== null && dps > 0 && raw ? dps / raw : null;
+      return { ...e, mkt, adj: mkt === null ? null : e.exDrop - mkt, dps, y, gap: y === null || mkt === null ? null : e.exDrop - mkt + y };
+    }).filter((e) => e.dps === null || e.dps > 0);
+    const avg = (k) => { const a = list.map((x) => x[k]).filter((v) => v !== null); return a.length ? a.reduce((p, v) => p + v, 0) / a.length : null; };
+    return `<div class="row-head"><h3>権利落ちの値動き</h3><small>${fyEnd}月・${midM}月末の権利。権利付き最終日 = 月末の 2 営業日前、権利落ち日 = その翌営業日</small></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>権利月</th><th>権利付き最終日</th><th>20日前から最終日まで</th><th>権利落ち日の騰落</th><th>TOPIX 比</th><th>1株配当</th><th>配当利回り(その回)</th><th>TOPIX 比 + 配当</th><th>落ちた後 20日</th></tr></thead><tbody>${list.slice().reverse().map((e) => `<tr><th>${esc(e.month)}</th><td>${esc(e.cumDate)}</td><td>${pctCell(e.runUp)}</td><td>${pctCell(e.exDrop, 2)}</td><td>${pctCell(e.adj, 2)}</td><td>${e.dps === null ? "—" : `${fmtPrice(e.dps)}円`}</td><td>${e.y === null ? "—" : `${(e.y * 100).toFixed(2)}%`}</td><td>${pctCell(e.gap, 2)}</td><td>${pctCell(e.after)}</td></tr>`).join("")}<tr class="avg"><th>平均(${list.length}回)</th><td></td><td>${pctCell(avg("runUp"))}</td><td>${pctCell(avg("exDrop"), 2)}</td><td>${pctCell(avg("adj"), 2)}</td><td></td><td>${avg("y") === null ? "—" : `${(avg("y") * 100).toFixed(2)}%`}</td><td>${pctCell(avg("gap"), 2)}</td><td>${pctCell(avg("after"))}</td></tr></tbody></table></div>
+      <p class="foot">「TOPIX 比 + 配当」は、権利落ち日の下げ(市場の動きを除く)が配当の分より小さければプラス、配当以上に売られればマイナス。配当は IRBANK の中間・期末の1株配当(分割前の実際の額)で、日足のある期間(${esc(cur.daily[0]?.d || "")}〜)だけ計算しています。</p>`;
+  }
+
+  // ---------- 市場の需給(指数) ----------
+  function tabSupply(cur) {
+    const n225 = idxRows("N225"), tpx = idxRows("TPX"); const tMap = new Map(tpx.map((r) => [r.d, r.c]));
+    const nt = n225.filter((r) => tMap.has(r.d)).map((r) => ({ time: r.d, value: r.c / tMap.get(r.d) }));
+    const ntLast = nt.at(-1); const ntAvg = nt.slice(-250).reduce((p, x) => p + x.value, 0) / Math.max(1, nt.slice(-250).length);
+    const parts = [];
+    parts.push(`<div class="row-head"><h3>NT 倍率(日経平均 ÷ TOPIX)</h3><small>${ntLast ? `${esc(ntLast.time)} ${ntLast.value.toFixed(2)}倍 · 1年平均 ${ntAvg.toFixed(2)}倍` : ""} · 上がるほど値がさ株(半導体・ファストリなど)主導、下がるほど銀行・内需など TOPIX の大型株主導</small></div>${nt.length ? mini("miniNT", 170, (c) => { const s = c.addSeries(LW.LineSeries, { color: "#ff9800", lineWidth: 2, title: "NT倍率", priceFormat: { type: "price", precision: 2, minMove: 0.01 } }); s.setData(nt); }) : ""}`);
+    if (!S.rankData) {
+      parts.unshift(`<div class="empty">騰落レシオ・新高値/新安値・移動平均線より上の割合・信用買残の時価総額比は、対象銘柄(約400)の日足から計算します。<br><button type="button" class="btn" data-load-universe>全銘柄の株価を読み込んで計算する</button><br><small>ランキング・信用ページと同じ読み込み(十数MB)です。</small></div>`);
+      return parts.join("");
+    }
+    if (!S.breadth) {
+      const prices = {}; Object.entries(S.rankData.charts).forEach(([code, c]) => { prices[code] = (c.prices || []).filter((r) => r.d >= (c.dailyFrom || "0000")); });
+      S.breadth = SRAna.breadthSeries(prices);
+    }
+    const b = S.breadth; const lb = b.at(-1);
+    const agg = aggregateSeries(S.rank || []);
+    const lastAgg = agg.filter((x) => x.buyToMcap !== null).at(-1);
+    const pc = (v) => (v === null || v === undefined ? "—" : `${Math.round(v * 100)}%`);
+    const cards = lb ? `<div class="cards"><article><span>騰落レシオ(25日)</span><strong class="${lb.adRatio >= 120 ? "down" : lb.adRatio <= 70 ? "up" : ""}">${lb.adRatio === null ? "—" : lb.adRatio.toFixed(1)}<small>%</small></strong><em>${esc(lb.d)} · 120% 以上は過熱、70% 以下は売られすぎの目安</em></article>
+      <article><span>値上がり / 値下がり</span><strong>${fmt(lb.adv)} / ${fmt(lb.dec)}</strong><em>${fmt(lb.n)}銘柄(stockAI 対象)</em></article>
+      <article><span>52週 新高値 / 新安値</span><strong>${fmt(lb.hi)} / ${fmt(lb.lo)}</strong><em>終値ベース</em></article>
+      <article><span>25日線 / 200日線より上</span><strong>${pc(lb.n25 ? lb.above25 / lb.n25 : null)} / ${pc(lb.n200 ? lb.above200 / lb.n200 : null)}</strong><em>銘柄の割合</em></article>
+      <article><span>信用買残 ÷ 時価総額</span><strong>${lastAgg ? `${(lastAgg.buyToMcap * 100).toFixed(2)}<small>%</small>` : "—"}</strong><em>${lastAgg ? `${esc(lastAgg.time)} 週 · 対象銘柄の合計` : ""}</em></article></div>` : "";
+    const ad = mini("miniAD", 190, (c) => {
+      const s = c.addSeries(LW.LineSeries, { color: "#2962ff", lineWidth: 2, title: "騰落レシオ25", priceFormat: { type: "price", precision: 1, minMove: 0.1 } }); s.setData(b.filter((x) => x.adRatio !== null).map((x) => ({ time: x.d, value: x.adRatio })));
+      [[120, css("--down")], [70, css("--up")], [100, css("--tv-grid2")]].forEach(([p, col]) => s.createPriceLine({ price: p, color: col, lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "" }));
+    });
+    const ma = mini("miniMA", 170, (c) => {
+      const pf = { type: "custom", formatter: (v) => `${v.toFixed(0)}%`, minMove: 1 };
+      const a = c.addSeries(LW.LineSeries, { color: "#ff9800", lineWidth: 1.5, title: "25日線より上", priceFormat: pf }); a.setData(b.filter((x) => x.n25).map((x) => ({ time: x.d, value: x.above25 / x.n25 * 100 })));
+      const d2 = c.addSeries(LW.LineSeries, { color: "#ab47bc", lineWidth: 1.5, title: "200日線より上", priceFormat: pf }); d2.setData(b.filter((x) => x.n200).map((x) => ({ time: x.d, value: x.above200 / x.n200 * 100 })));
+    });
+    const hl = mini("miniHL", 150, (c) => {
+      const h = c.addSeries(LW.HistogramSeries, { color: alpha(UP(), 0.7), title: "新高値", priceFormat: { type: "price", precision: 0, minMove: 1 } }); h.setData(b.filter((x) => x.d >= (b.find((y) => y.hi || y.lo)?.d || "")).map((x) => ({ time: x.d, value: x.hi })));
+      const l = c.addSeries(LW.HistogramSeries, { color: alpha(DOWN(), 0.7), title: "新安値", priceFormat: { type: "price", precision: 0, minMove: 1 } }); l.setData(b.filter((x) => x.d >= (b.find((y) => y.hi || y.lo)?.d || "")).map((x) => ({ time: x.d, value: -x.lo })));
+    });
+    const bm = agg.some((x) => x.buyToMcap !== null) ? mini("miniBM", 160, (c) => { const s = c.addSeries(LW.LineSeries, { color: css("--credit-buy"), lineWidth: 2, title: "買残÷時価総額", priceFormat: { type: "custom", formatter: (v) => `${v.toFixed(2)}%`, minMove: 0.01 } }); s.setData(agg.filter((x) => x.buyToMcap !== null).map((x) => ({ time: x.time, value: x.buyToMcap * 100 }))); }) : "";
+    parts.unshift(`${cards}<div class="row-head"><h3>騰落レシオ(25日)</h3><small>25日間の値上がり銘柄数の合計 ÷ 値下がり銘柄数の合計</small></div>${ad}
+      <div class="row-head"><h3>移動平均線より上にある銘柄の割合</h3></div>${ma}<div class="row-head"><h3>52週 新高値・新安値の銘柄数</h3><small>下向きが新安値</small></div>${hl}
+      ${bm ? `<div class="row-head"><h3>信用買残の時価総額比(対象銘柄の合計・週次)</h3><small>買残金額 ÷ 時価総額。高いほど将来の売り物(買い方の返済売り)が積み上がっている</small></div>${bm}` : ""}`);
+    parts.push(`<p class="foot">騰落レシオなどは stockAI の対象銘柄(東証の売買代金上位 約400)の日足から計算しており、東証全体の公表値とは一致しません。</p>`);
+    return parts.join("");
   }
 
   // 株探の通期(百万円)に、株探に無い古い期を IRBANK(円)で補う(Future Sight と同じ)
@@ -1088,7 +1379,7 @@
     const table = `<div class="table-wrap"><table class="grid"><thead><tr><th>決算期</th><th>1株配当(円)</th><th>前期比</th><th>EPS(円)</th><th>配当性向</th><th>出典</th></tr></thead><tbody>${list.slice().reverse().map((r) => `<tr class="${r.isFc ? "fc" : ""}"><th>${r.isFc ? '<i class="tag">予</i>' : ""}${esc(r.period)}</th><td>${fmtPrice(r.dps)}</td><td>${pctCell(yoyOf(r.dps, r.prev?.dps))}</td><td>${fmtPrice(r.eps)}</td><td>${payout(r) === null ? "—" : `${(payout(r) * 100).toFixed(1)}%`}</td><td><small>${esc(r.source || "")}</small></td></tr>`).join("")}</tbody></table></div>`;
     const keys = div.length ? [...new Set(div.flatMap((r) => Object.keys(r)))].filter((k) => k !== "fiscal_year") : [];
     const irb = div.length ? `<div class="row-head"><h3>配当履歴(IRBANK・分割調整後)</h3></div><div class="table-wrap"><table class="grid"><thead><tr><th>年度</th>${keys.map((k) => `<th>${esc(S.catalog?.div?.[k]?.label || k)}</th>`).join("")}</tr></thead><tbody>${div.slice().reverse().map((r) => `<tr><th>${esc(r.fiscal_year)}</th>${keys.map((k) => `<td>${typeof r[k] === "number" ? fmt(r[k], Math.abs(r[k]) < 100 ? 2 : 0) : esc(r[k] ?? "—")}</td>`).join("")}</tr>`).join("")}</tbody></table></div>` : "";
-    return `${cards}${table}${irb}`;
+    return `${cards}${table}${exDividendSection(d, cur)}${irb}`;
   }
   function tabSeg(d) {
     const sg = d.irbank?.seg || []; if (!sg.length) return empty("セグメント情報はありません(単一セグメントの会社を含む)。");
@@ -1201,26 +1492,36 @@
     const step = (label) => (done, total) => { $("i", prog).style.width = `${Math.round(done / total * 100)}%`; $("span", prog).textContent = `${label} ${done}/${total}`; };
     rankLoaded = (async () => {
       const details = await SRData.allChunks("detail", (doc) => ({ credit: doc?.credit || [], shares: num(doc?.irbank?.security?.issued_shares) }), step("信用残を読み込み中"));
-      const charts = await SRData.allChunks("chart", (doc) => { const dec = SRData.decodeChart(doc); const first = dec.daily[0]?.d || "9999"; return { prices: [...dec.weekly.filter((r) => r.d < first), ...dec.daily], splits: dec.splits }; }, step("株価を読み込み中"));
+      const charts = await SRData.allChunks("chart", (doc) => { const dec = SRData.decodeChart(doc); const first = dec.daily[0]?.d || "9999"; return { prices: [...dec.weekly.filter((r) => r.d < first), ...dec.daily], splits: dec.splits, dailyFrom: first }; }, step("株価を読み込み中"));
       prog.hidden = true;
       return { details, charts };
     })().catch((e) => { rankLoaded = null; prog.hidden = true; throw e; });
     return rankLoaded;
   }
   function computeRank(data) {
-    const method = $("#rankMethod").value;
-    return S.preds.map((p) => {
+    const method = $("#rankMethod")?.value || S.set.creditMethod;
+    const factors = { tpx: idxRows("TPX"), fx: idxRows("USDJPY"), tnx: idxRows("TNX") };
+    const list = S.preds.map((p) => {
       const d = data.details[p.code], c = data.charts[p.code];
       const est = d && c ? SRCredit.estimateCredit(dropErrata(d.credit), c.prices, c.splits, { method }) : { rows: [] };
       const rows = est.rows; const last = rows.at(-1) || null; const price = c?.prices.at(-1)?.c ?? p.close;
+      const daily = c ? c.prices.filter((r) => r.d >= (c.dailyFrom || "0000")) : [];
+      const fifo = est.method === "fifo6m" || !rows.length ? est : SRCredit.estimateCredit(dropErrata(d.credit), c.prices, c.splits, { method: "fifo6m" });
+      const exp = fifo.rows?.length ? expiryWithin(fifo, price, 91) : null;
+      const sens = daily.length > 120 ? SRAna.sensitivity(daily, factors, 250, { roll: false, windows: [250] }) : null;
       return {
         code: p.code, name: p.name, industry: p.industry, close: price, chg: num(p.change1d), rank: p.rank,
         ratio: last?.ratio ?? null, buy: last?.buy ?? null, sell: last?.sell ?? null, buyAmount: last?.buyAmount ?? null, sellAmount: last?.sellAmount ?? null,
         buyPnl: last?.buyPnl ?? null, sellPnl: last?.sellPnl ?? null, warmup: last?.warmup ?? true, date: last?.date ?? null,
         buy4w: SRCredit.changeOver(rows, "buy", 4), sell4w: SRCredit.changeOver(rows, "sell", 4), buyDays: last?.buyDays ?? null,
-        mcap: d?.shares && price ? d.shares * price : null, buyToMcap: d?.shares && last?.buy ? last.buy * (last.splitFactor || 1) / d.shares : null, rows,
+        mcap: d?.shares && price ? d.shares * price : null, buyToMcap: d?.shares && last?.buy ? last.buy * (last.splitFactor || 1) / d.shares : null, rows, shares: d?.shares || null,
+        rs: SRAna.rsScore(daily), exp3m: exp?.buy.share ?? null, exp3mAmount: exp?.buy.amount ?? null, fx: sens?.main?.fx.b ?? null, beta: sens?.main?.beta.b ?? null,
       };
     });
+    // RS スコアの順位(0〜1、1 が一番強い)
+    const rsAll = list.map((x) => x.rs).filter((v) => v !== null).sort((a, b) => a - b);
+    list.forEach((x) => { x.rsPct = x.rs === null || !rsAll.length ? null : rsAll.filter((v) => v <= x.rs).length / rsAll.length; });
+    return list;
   }
   // 全銘柄合計(金額加重)の推定評価損益率の推移。週ごとに各銘柄の最後の観測を足し合わせる
   function aggregateSeries(list) {
@@ -1228,9 +1529,9 @@
     const acc = new Map();
     list.forEach((x) => {
       const per = new Map(); x.rows.forEach((r) => { if (!r.warmup) per.set(wk(r.date), r); });
-      per.forEach((r, w) => { const a = acc.get(w) || { bA: 0, bC: 0, sA: 0, sC: 0, n: 0, buy: 0, sell: 0 }; if (r.buyAmount !== null && r.buyCost) { a.bA += r.buyAmount; a.bC += r.buyCost; } if (r.sellAmount !== null && r.sellCost) { a.sA += r.sellAmount; a.sC += r.sellCost; } a.n++; acc.set(w, a); });
+      per.forEach((r, w) => { const a = acc.get(w) || { bA: 0, bC: 0, sA: 0, sC: 0, n: 0, buy: 0, sell: 0, bAll: 0, mc: 0 }; if (r.buyAmount !== null && r.buyCost) { a.bA += r.buyAmount; a.bC += r.buyCost; } if (r.sellAmount !== null && r.sellCost) { a.sA += r.sellAmount; a.sC += r.sellCost; } if (x.shares && r.close && r.buyAmount !== null) { a.bAll += r.buyAmount; a.mc += x.shares * r.close; } a.n++; acc.set(w, a); });
     });
-    const out = [...acc.entries()].sort().map(([w, a]) => ({ time: w, buyPnl: a.bC ? a.bA / a.bC - 1 : null, sellPnl: a.sC ? 1 - a.sA / a.sC : null, ratio: a.sA ? a.bA / a.sA : null, bA: a.bA, sA: a.sA, n: a.n }));
+    const out = [...acc.entries()].sort().map(([w, a]) => ({ time: w, buyPnl: a.bC ? a.bA / a.bC - 1 : null, sellPnl: a.sC ? 1 - a.sA / a.sC : null, ratio: a.sA ? a.bA / a.sA : null, bA: a.bA, sA: a.sA, n: a.n, buyToMcap: a.mc ? a.bAll / a.mc : null }));
     const maxN = Math.max(...out.map((o) => o.n), 0);
     return out.filter((o) => o.n >= maxN * 0.6); // 対象銘柄が少ない古い週は構成が偏るので除く
   }
@@ -1261,6 +1562,10 @@
     ["buy4w", "買残 4週", (x) => pctCell(x.buy4w, 0)], ["sell4w", "売残 4週", (x) => pctCell(x.sell4w, 0)],
     ["buyDays", "買残/出来高", (x) => (x.buyDays === null ? "—" : `${fmt(x.buyDays, 1)}日`)], ["buyToMcap", "買残/発行株", (x) => (x.buyToMcap === null ? "—" : `${(x.buyToMcap * 100).toFixed(2)}%`)],
     ["mcap", "時価総額", (x) => oku(x.mcap)],
+    ["exp3m", "期日 3か月内<br>(買残比・推定)", (x) => (x.exp3m === null ? "—" : `${Math.round(x.exp3m * 100)}%<small>${oku(x.exp3mAmount)}</small>`)],
+    ["rsPct", "RS 順位", (x) => (x.rsPct === null ? "—" : `${Math.round(x.rsPct * 100)}<small>${pct(x.rs)}</small>`)],
+    ["fx", "為替感応度<br>(ドル円+1%)", (x) => (x.fx === null ? "—" : `<span class="${cls(x.fx)}">${x.fx >= 0 ? "+" : ""}${x.fx.toFixed(2)}%</span>`)],
+    ["beta", "β(TOPIX)", (x) => (x.beta === null ? "—" : x.beta.toFixed(2))],
   ];
   function drawRankTable() {
     if (!S.rank) return;

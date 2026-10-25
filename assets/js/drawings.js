@@ -4,7 +4,7 @@
 //   toX(date) … 日付 → x 座標(未来の日付も概算で置ける)
 //   toY(price) … 価格 → y 座標
 // 種類: trend(トレンドライン)/ ray(水平レイ)/ hline(水平線)/ vline(垂直線)/ rect(長方形)/
-//       fib(フィボナッチ・リトレースメント)/ measure(計測・保存しない)/ text(テキスト)
+//       fib(フィボナッチ・リトレースメント)/ measure(計測・保存しない)/ text(テキスト)/ avwap(アンカード VWAP)
 (function (root) {
   "use strict";
   const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.786, 1];
@@ -68,6 +68,16 @@
           const w = ctx.measureText(label).width + 14; const lx = (A.x + B.x) / 2 - w / 2, ly = (up ? Math.min(A.y, B.y) - 26 : Math.max(A.y, B.y) + 6);
           ctx.fillStyle = c; ctx.fillRect(lx, ly, w, 20); ctx.fillStyle = "#ffffff"; ctx.textAlign = "center"; ctx.fillText(label, lx + w / 2, ly + 14);
         } break;
+        case "avwap": {
+          // 起点の足から先の VWAP を折れ線で(値は app 側が日足から計算して返す)
+          const pts = (this.opts.avwap?.(it.a.t) || []).map((q) => { const x = this.opts.toX(q.t), y = this.opts.toY(q.p); return x === null || y === null ? null : { x, y }; }).filter(Boolean);
+          if (pts.length) {
+            ctx.beginPath(); pts.forEach((q, k) => (k ? ctx.lineTo(q.x, q.y) : ctx.moveTo(q.x, q.y))); ctx.stroke();
+            ctx.textAlign = "left"; ctx.fillText("AVWAP", pts[0].x + 4, pts[0].y - 6);
+            handle(pts[0]); it._pts = pts;
+          }
+          break;
+        }
         case "text": if (A) { ctx.font = "13px -apple-system, 'Segoe UI', 'Noto Sans JP', sans-serif"; ctx.textAlign = "left"; ctx.fillText(it.text || "", A.x + 4, A.y - 4); if (sel) { const w = ctx.measureText(it.text || "").width; ctx.strokeRect(A.x, A.y - 20, w + 8, 22); } } break;
       }
       ctx.restore();
@@ -84,6 +94,7 @@
         if (it.type === "ray" && A) d = x >= A.x - 4 ? Math.abs(y - A.y) : Infinity;
         if (it.type === "vline") { const vx = this.opts.toX(it.a.t); if (vx !== null) d = Math.abs(x - vx); }
         if ((it.type === "rect" || it.type === "fib") && A && B) { const inX = x >= Math.min(A.x, B.x) - 4 && x <= Math.max(A.x, B.x) + 4, inY = y >= Math.min(A.y, B.y) - 4 && y <= Math.max(A.y, B.y) + 4; d = inX && inY ? Math.min(Math.abs(x - A.x), Math.abs(x - B.x), Math.abs(y - A.y), Math.abs(y - B.y), it.type === "fib" ? 0 : 99) : Infinity; }
+        if (it.type === "avwap" && it._pts?.length) d = Math.min(...it._pts.map((q, k) => (k ? segD(x, y, it._pts[k - 1].x, it._pts[k - 1].y, q.x, q.y) : Math.hypot(x - q.x, y - q.y))));
         if (it.type === "text" && A) d = x >= A.x - 4 && x <= A.x + 200 && y >= A.y - 22 && y <= A.y + 4 ? 0 : Infinity;
         if (d < bestD) { bestD = d; best = i; }
       });
@@ -92,6 +103,33 @@
   }
 
   // 何点で描くか
-  const POINTS = { trend: 2, ray: 1, hline: 1, vline: 1, rect: 2, fib: 2, measure: 2, text: 1 };
-  root.SRDraw = { DrawingLayer, POINTS };
+  const POINTS = { trend: 2, ray: 1, hline: 1, vline: 1, rect: 2, fib: 2, measure: 2, text: 1, avwap: 1 };
+
+  // 価格帯別出来高(表示している範囲の出来高を価格帯ごとに、右端から横棒で)。主系列に付ける
+  //   opts.profile() … SRAna.volumeProfile の結果 / opts.toY(price) / opts.colors() … {up, down, poc, va}
+  class VolumeProfile {
+    constructor(opts) { this.opts = opts; this.visible = true; this._view = { zOrder: () => "bottom", renderer: () => ({ draw: (t) => this._draw(t) }) }; }
+    attached({ requestUpdate }) { this._req = requestUpdate; }
+    detached() { this._req = null; }
+    update() { this._req?.(); }
+    updateAllViews() {}
+    paneViews() { return [this._view]; }
+    _draw(target) {
+      const vp = this.visible ? this.opts.profile() : null; if (!vp) return;
+      target.useMediaCoordinateSpace(({ context: ctx, mediaSize: size }) => {
+        const c = this.opts.colors(); const maxW = size.width * 0.28;
+        vp.bins.forEach((b, k) => {
+          const y1 = this.opts.toY(b.hi), y2 = this.opts.toY(b.lo); if (y1 === null || y2 === null) return;
+          const h = Math.max(1, Math.abs(y2 - y1) - 1); const top = Math.min(y1, y2) + 0.5;
+          const inVA = b.lo >= vp.val - 1e-9 && b.hi <= vp.vah + 1e-9; const a = inVA ? 0.42 : 0.2;
+          const wUp = b.up / vp.max * maxW, wDn = b.down / vp.max * maxW;
+          ctx.globalAlpha = a; ctx.fillStyle = c.up; ctx.fillRect(size.width - wUp, top, wUp, h);
+          ctx.fillStyle = c.down; ctx.fillRect(size.width - wUp - wDn, top, wDn, h);
+          if (k === vp.poc) { ctx.globalAlpha = 0.9; ctx.strokeStyle = c.poc; ctx.lineWidth = 1; ctx.setLineDash([4, 3]); const y = top + h / 2; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(size.width, y); ctx.stroke(); ctx.setLineDash([]); ctx.fillStyle = c.poc; ctx.font = "10px -apple-system, 'Segoe UI', 'Noto Sans JP', sans-serif"; ctx.fillText("POC", 4, y - 3); }
+        });
+        ctx.globalAlpha = 1;
+      });
+    }
+  }
+  root.SRDraw = { DrawingLayer, VolumeProfile, POINTS };
 })(window);

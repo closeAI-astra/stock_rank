@@ -422,3 +422,10 @@ html.sidebar-closed .sidebar-open { display: grid; }
   .sidebar-close, .sidebar-open, html.sidebar-closed .sidebar-open { display: none; }
   html.sidebar-closed .sidebar { visibility: visible; padding: 22px 18px; }
 }
+
+/* 分析タブ(感応度・進捗・財務の質・需給) */
+table.grid tr.avg > * { font-weight: 700; border-top: 2px solid var(--line-strong); }
+table.grid td small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+.mini-chart + .row-head { margin-top: 18px; }
+.empty .btn { margin: 10px 0 4px; }
+.metrics dd.up, .metrics dd .up { color: var(--up); } .metrics dd.down { color: var(--down); }

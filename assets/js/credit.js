@@ -86,7 +86,7 @@
             }
           });
           const delta = newShares - lots.reduce((s, l) => s + l.shares, 0);
-          if (delta > 0) lots.push({ shares: delta, price, date });
+          if (delta > 0) lots.push({ shares: delta, price, date, built: date, cost0: price });
           else if (delta < 0) {
             let left = -delta;
             while (left > 1e-9 && lots.length) { const l = lots[0]; const take = Math.min(l.shares, left); l.shares -= take; left -= take; if (l.shares <= 1e-9) lots.shift(); }
@@ -99,6 +99,8 @@
         shares = newShares;
         return { shares, cost, oldest: null };
       },
+      // 残っている建玉(先入れ先出しのときだけ)。date は最後に建てた(乗り換えた)日、built は最初に建てた日
+      lots() { return lots.map((l) => ({ ...l })); },
     };
   }
 
@@ -137,7 +139,31 @@
       };
       prev = out; return out;
     });
-    return { method, unadjusted, rows, warmupEnd };
+    return { method, unadjusted, rows, warmupEnd, buyLots: buyBook.lots(), sellLots: sellBook.lots() };
+  }
+
+  // 信用期日の到来予定。先入れ先出しで残った建玉それぞれの「次の期日」(建てた日・乗り換えた日 + 182日)を、
+  // 週または月ごとに集計する。price はいまの株価(分割調整済み)。asOf より前に来る期日は、asOf 以降の次の期日に送る
+  // unknownBuilt: この日に建てたことになっている建玉は除く(履歴の最初の残高。本当に建てた日は分からない)
+  function expirySchedule(lots, price, asOf, by = "month", unknownBuilt = null) {
+    const t0 = toTime(asOf); const groups = new Map();
+    (lots || []).forEach((l) => {
+      if (!(l.shares > 0) || (unknownBuilt && l.built === unknownBuilt)) return;
+      let exp = toTime(l.date) + EXPIRY_DAYS * DAY; let rolled = 0;
+      while (exp < t0) { exp += EXPIRY_DAYS * DAY; rolled++; }
+      const d = isoDate(exp);
+      let key;
+      if (by === "week") { const t = new Date(exp); t.setUTCDate(t.getUTCDate() + ((5 - t.getUTCDay() + 7) % 7)); key = t.toISOString().slice(0, 10); }
+      else key = d.slice(0, 7);
+      const g = groups.get(key) || { key, shares: 0, cost: 0, first: d, last: d, lots: 0, rolled: 0 };
+      g.shares += l.shares; g.cost += l.shares * l.price; g.lots++; g.rolled += rolled;
+      if (d < g.first) g.first = d; if (d > g.last) g.last = d;
+      groups.set(key, g);
+    });
+    return [...groups.values()].sort((a, b) => (a.key < b.key ? -1 : 1)).map((g) => ({
+      ...g, avgPrice: g.shares ? g.cost / g.shares : null, amount: price === null ? null : g.shares * price,
+      pnl: price === null || !g.cost ? null : g.shares * price / g.cost - 1,
+    }));
   }
 
   // n 観測前(週次なら n 週前)との変化率
@@ -160,6 +186,6 @@
     return [...byDate.values()].sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
   }
 
-  const api = { estimateCredit, mergeSources, creditIsUnadjusted, splitFactor, makePriceBook, changeOver, EXPIRY_DAYS };
+  const api = { estimateCredit, expirySchedule, mergeSources, creditIsUnadjusted, splitFactor, makePriceBook, changeOver, EXPIRY_DAYS };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.SRCredit = api;
 })(typeof window !== "undefined" ? window : globalThis);

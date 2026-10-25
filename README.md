@@ -33,6 +33,19 @@ stockAI(Future Sight)が集めた実データ(株価・決算・配当・財務�
 - **stockAI(Future Sight)**: `closeAI-astra/future.insight.stockAI.si` が公開している暗号化データ(`data/*.json.enc`)を、ブラウザ内で同じパスワードで復号して読みます。データはこのリポジトリに複製しません。同じ `*.github.io` で Future Sight を「この端末で覚える」で開いていれば、パスワード入力は省略されます。
 - **保存データ**: `data/kabutan/`(毎週の定期取得)と `data/irbank/`(一度きり)。同じ鍵で暗号化。信用残は stockAI に無い日付だけを 株探保存 → IRBANK保存 の順でつなぎます。
 
+## 分析(手元のデータから計算)
+
+| どこ | 内容 |
+| --- | --- |
+| チャートのインジケーター | 信用買い方・売り方の推定平均単価の線、価格帯別出来高(表示範囲・POC と出来高 70% の帯)、アンカード VWAP(直近の決算発表・52週高値・52週安値から。左の描画ツールで任意の足からも)、PER・PBR バンド(実績 EPS・BPS × 過去の倍率の 10/50/90% 点) |
+| 信用残タブ | 信用期日の到来予定(推定)。先入れ先出しで残った建玉の「建てた日 + 6か月」を月・週ごとに集計 |
+| 感応度・リスク | TOPIX・ドル円・米10年債への重回帰(ドル円・米金利は当日 + 前日の係数の和)、期間別と推移、ボラティリティ・最大下落、TOPIX との相対力、RS スコア(全銘柄の中の順位) |
+| 決算進捗 | 四半期の累計 ÷ 通期(今期は会社予想)と、過去の同じ時期の自社平均。会社予想のクセ(IRBANK) |
+| 財務の質 | F スコア・Z スコア・Zmijewski・清原式ネットキャッシュ比率・Sloan 比率・ROIC・CCC・グレアム数 |
+| 配当タブ | 権利落ちの値動き(権利付き最終日までの上昇、落ち日の TOPIX 比、配当との差、落ちた後) |
+| 指数 → 市場の需給 | NT 倍率、騰落レシオ(25日)、移動平均線より上の割合、52週新高値・新安値、信用買残の時価総額比(対象銘柄から) |
+| ランキング | 期日 3か月内の買残比、RS 順位、為替感応度、β |
+
 ## 推定信用評価損益率
 
 個別銘柄の信用評価損益率は公表されていないため、申込日ごとの残高と日足から推定します(`assets/js/credit.js`)。
@@ -101,6 +114,7 @@ Settings → Pages → Source を「Deploy from a branch」にして、このブ
 
 ```sh
 node tests/credit.test.js                  # 推定評価損益率の計算
+node tests/analytics.test.js               # VWAP・価格帯別出来高・進捗率・回帰・権利落ち・信用期日
 python -m unittest tests/test_archive.py   # 株探・IRBANK の表の取り出し・ページ送り・暗号
 python tests/make_mock.py OUT pass          # 偽の stockAI データ(画面の確認用)
 python tests/fake_sites.py 8765             # 偽の株探・IRBANK(KABUTAN_BASE / IRBANK_BASE で向ける)
