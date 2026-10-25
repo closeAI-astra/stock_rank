@@ -71,6 +71,13 @@ def sample_file(f: Fetcher, url: str) -> None:
                 for row in df.head(14).itertuples(index=False):
                     cells = ["" if (isinstance(c, float) and c != c) else str(c) for c in row]
                     print("      |", " | ".join(cells)[:240])
+        elif ext == "pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(raw))
+            for i, page in enumerate(reader.pages[:2]):
+                print(f"      [page {i + 1}]")
+                for line in (page.extract_text() or "").splitlines()[:45]:
+                    print("      |", line[:200])
         elif ext == "zip":
             import zipfile
             z = zipfile.ZipFile(io.BytesIO(raw))
@@ -126,7 +133,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sample", action="store_true")
     ap.add_argument("--only", default="")
+    ap.add_argument("--urls", default="", help="この URL だけを取って中身を表示する(カンマ区切り)")
     opts = ap.parse_args()
+    if opts.urls:
+        f = Fetcher(1.5, "https://www.jpx.co.jp")
+        for u in [x.strip() for x in opts.urls.split(",") if x.strip()]:
+            print(f"\n  SAMPLE {u}")
+            sample_file(f, u)
+        return 0
     for name, (base, paths) in START.items():
         if opts.only and name not in opts.only.split(","):
             continue
