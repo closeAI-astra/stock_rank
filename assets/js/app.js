@@ -1,4 +1,4 @@
-// Stock Rank — 画面(チャート・ランキング・マクロ・IRBANK 保存)
+// Stock Rank — 画面(チャート・ランキング・マクロ・保存データ)
 (() => {
   "use strict";
   const LW = window.LightweightCharts;
@@ -64,7 +64,8 @@
     dash: null, preds: [], byCode: new Map(), catalog: {}, code: null, view: "chart",
     set: { ...DEFAULTS, ...LS.get("stockrank-settings", {}) },
     favs: new Set(LS.get("stockrank-favs", [])),
-    cur: null, // 表示中の銘柄 {code, daily, weekly, splits, detail, archive, est, credit}
+    cur: null, // 表示中の銘柄 {code, daily, weekly, splits, detail, archives: {kabutan, irbank}, est, credit}
+    archiveIndex: {}, // 取得元ごとの index(未読込は undefined、無ければ null)
     tool: "cursor", pending: null,
   };
   const saveSettings = () => LS.set("stockrank-settings", S.set);
@@ -112,7 +113,6 @@
     buildToolbar(); bindChartUi(); bindSearch(); bindWatch(); renderWatch();
     window.addEventListener("hashchange", route);
     route();
-    SRData.own("irbank/index").then((x) => { S.archiveIndex = x; }).catch(() => { S.archiveIndex = null; });
   }
 
   // =====================================================================
@@ -205,19 +205,18 @@
   // =====================================================================
   // 銘柄の読み込み
   // =====================================================================
-  // stockAI の信用残(週次→日次)に、IRBANK 保存分のより古い履歴を前につなぐ
-  function mergeCredit(base, archived) {
-    const a = (base || []).filter((r) => r?.date).map((r) => ({ ...r, source: r.source || (r.date >= "2026-09-25" ? "JPX" : "stockAI") }));
-    const first = a[0]?.date || "9999-12-31";
-    const old = (archived || []).filter((r) => r?.date && r.date < first && (num(r.buy) !== null || num(r.sell) !== null)).map((r) => ({ date: r.date, buy: num(r.buy), sell: num(r.sell), ratio: num(r.ratio), source: "IRBANK保存" }));
-    return [...old, ...a].sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
+  // 信用残を日付でつなぐ。同じ日付があれば stockAI(〜2026-09 週次・以降 JPX 日次)> 株探保存 > IRBANK保存 の順に採る。
+  //   株探保存 = 毎週の定期取得(これからの本線)、IRBANK保存 = 使えなくなる前に一度だけ取った古い履歴
+  const ARCHIVE_SOURCES = [["kabutan", "株探保存"], ["irbank", "IRBANK保存"]];
+  function mergeCredit(base, archives) {
+    return SRCredit.mergeSources([[base, (r) => r.source || (r.date >= "2026-09-25" ? "JPX" : "stockAI")], ...ARCHIVE_SOURCES.map(([k, label]) => [archives?.[k]?.margin, label])]);
   }
   function priceRowsForCredit(cur) {
     const first = cur.daily[0]?.d || "9999";
     return [...cur.weekly.filter((r) => r.d < first), ...cur.daily];
   }
   function computeEst(cur) {
-    cur.credit = mergeCredit(cur.detail?.credit, cur.archive?.margin);
+    cur.credit = mergeCredit(cur.detail?.credit, cur.archives);
     cur.est = SRCredit.estimateCredit(cur.credit, priceRowsForCredit(cur), cur.splits, { method: S.set.creditMethod });
   }
 
@@ -228,14 +227,15 @@
     document.title = `${code} ${row?.name || ""} · Stock Rank`;
     $$("#watchList .watch-row").forEach((b) => b.classList.toggle("active", b.dataset.code === code));
     $("#tvLegend").innerHTML = '<span class="muted">読み込み中…</span>';
-    const [doc, detail, archive] = await Promise.all([
+    const [doc, detail, kabutan, irbank] = await Promise.all([
       SRData.chartDoc(code).catch((e) => { console.warn(e); return null; }),
       SRData.detailDoc(code).catch((e) => { console.warn(e); return null; }),
+      SRData.own(`kabutan/stocks/${code}`).catch(() => null),
       SRData.own(`irbank/stocks/${code}`).catch(() => null),
     ]);
     if (S.code !== code) return; // 読み込み中に別銘柄へ移った
     const dec = SRData.decodeChart(doc);
-    S.cur = { code, row, ...dec, detail, archive };
+    S.cur = { code, row, ...dec, detail, archives: { kabutan, irbank } };
     S.drawings = LS.get(`stockrank-draw-${code}`, { h: [], t: [] });
     S.pending = null;
     computeEst(S.cur);
@@ -542,7 +542,7 @@
   // =====================================================================
   // 下段のタブ(信用残・株探/IRBANK の企業データ)
   // =====================================================================
-  const BOTTOM_TABS = [["credit", "信用残・金額・評価損益"], ["perf", "業績"], ["quarter", "四半期"], ["fin", "財務"], ["ind", "指標"], ["val", "株価指標"], ["div", "配当"], ["seg", "セグメント"], ["peers", "競合"], ["ai", "AI予測"], ["irbank", "IRBANK 保存"]];
+  const BOTTOM_TABS = [["credit", "信用残・金額・評価損益"], ["perf", "業績"], ["quarter", "四半期"], ["fin", "財務"], ["ind", "指標"], ["val", "株価指標"], ["div", "配当"], ["seg", "セグメント"], ["peers", "競合"], ["ai", "AI予測"], ["saved", "株探・IRBANK 保存"]];
   function renderBottom() {
     const tabs = $("#bottomTabs");
     if (!tabs.dataset.built) {
@@ -552,7 +552,7 @@
     }
     $$("[data-btab]").forEach((b) => b.classList.toggle("active", b.dataset.btab === S.set.bottomTab));
     const cur = S.cur; const body = $("#bottomBody"); if (!cur) return;
-    const fn = { credit: tabCredit, perf: tabPerf, quarter: tabQuarter, fin: tabFin, ind: tabInd, val: tabVal, div: tabDiv, seg: tabSeg, peers: tabPeers, ai: tabAi, irbank: tabIrbank }[S.set.bottomTab] || tabCredit;
+    const fn = { credit: tabCredit, perf: tabPerf, quarter: tabQuarter, fin: tabFin, ind: tabInd, val: tabVal, div: tabDiv, seg: tabSeg, peers: tabPeers, ai: tabAi, saved: tabSaved }[S.set.bottomTab] || tabCredit;
     const d = cur.detail || {};
     try { body.innerHTML = fn(d, cur); } catch (e) { console.error(e); body.innerHTML = `<p class="muted pad">表示できませんでした: ${esc(e.message)}</p>`; }
     $$("[data-method]", body).forEach((b) => b.addEventListener("click", () => { S.set.creditMethod = b.dataset.method; saveSettings(); computeEst(cur); renderChart(true); renderSymCard(); renderBottom(); }));
@@ -561,6 +561,7 @@
     $$("[data-indcat]", body).forEach((b) => b.addEventListener("click", () => { S.indCat = b.dataset.indcat; renderBottom(); }));
     $$("[data-aih]", body).forEach((b) => b.addEventListener("click", () => { S.aiH = Number(b.dataset.aih); renderBottom(); }));
     $$("[data-irpage]", body).forEach((b) => b.addEventListener("click", () => { S.irPage = b.dataset.irpage; renderBottom(); }));
+    $$("[data-savedsrc]", body).forEach((b) => b.addEventListener("click", () => { S.savedSrc = b.dataset.savedsrc; S.irPage = null; renderBottom(); }));
     $$("[data-code]", body).forEach((b) => b.addEventListener("click", () => goChart(b.dataset.code)));
   }
   const empty = (msg) => `<div class="empty">${esc(msg)}</div>`;
@@ -720,14 +721,18 @@
     const histTable = preds.length ? `<div class="row-head"><h3>保存済み予測の履歴(${H}日先)</h3>${seg(hs.map((h) => [String(h), `${h}日`]), String(H), "aih")}<small>${settled.length ? `方向一致 ${hit}/${settled.length}` : "確定待ち"}</small></div><div class="table-wrap tall"><table class="grid"><thead><tr><th>基準日</th><th>採用</th><th>採用予測</th><th>CURRENT</th><th>GBM</th><th>DNN</th><th>実績</th><th>基準日終値</th></tr></thead><tbody>${preds.slice().reverse().map((p) => `<tr><th>${esc(p[0])}</th><td>${esc(p[2] || "")}</td><td class="${cls(p[3])}">${pct(p[3], 2)}</td><td>${pct(p[4], 2)}</td><td>${pct(p[5], 2)}</td><td>${pct(p[6], 2)}</td><td class="${cls(p[7])}">${num(p[7]) === null ? "確定待ち" : pct(p[7], 2)}</td><td>${fmtPrice(p[8])}</td></tr>`).join("")}</tbody></table></div>` : "";
     return `<div class="row-head"><h3>現在の AI 予測</h3><small>${esc(String(S.dash.asOf || "").slice(0, 16))} 時点 · 予測の対象は期間 VWAP</small></div>${nowTable}${histTable}`;
   }
-  function tabIrbank(d, cur) {
-    const a = cur.archive;
-    if (!a) return `<div class="empty">この銘柄の IRBANK 保存データはまだありません。<br><small>GitHub Actions の「IRBANK archive」を実行すると、ここに信用残の長期履歴などが入ります(「IRBANK 保存」ページを参照)。</small></div>`;
+  function tabSaved(d, cur) {
+    const have = ARCHIVE_SOURCES.filter(([k]) => cur.archives?.[k]);
+    if (!have.length) return `<div class="empty">この銘柄の保存データはまだありません。<br><small>GitHub Actions の「Kabutan weekly」(毎週の株探)・「IRBANK archive」(一度きり)を実行すると、ここに信用残の履歴やページの表が入ります(「保存データ」ページを参照)。</small></div>`;
+    const srcKey = have.some(([k]) => k === S.savedSrc) ? S.savedSrc : have[0][0];
+    const srcLabel = { kabutan: "株探", irbank: "IRBANK" }[srcKey];
+    const a = cur.archives[srcKey];
     const pages = a.pages || [];
     const sel = pages.find((p) => p.name === S.irPage) || pages.find((p) => p.name === "margin") || pages[0];
     const tables = (sel?.tables || []).map((t, i) => `<div class="row-head"><h3>${esc(t.title || `表 ${i + 1}`)}</h3><small>${t.rows.length}行</small></div><div class="table-wrap tall"><table class="grid left">${t.headers?.length ? `<thead><tr>${t.headers.map((h) => `<th>${esc(h)}</th>`).join("")}</tr></thead>` : ""}<tbody>${t.rows.slice(0, 2000).map((r) => `<tr>${r.map((c, j) => (j === 0 ? `<th>${esc(c)}</th>` : `<td>${esc(c)}</td>`)).join("")}</tr>`).join("")}</tbody></table></div>`).join("");
-    return `<div class="row-head"><h3>IRBANK 保存分(${esc(String(a.fetchedAt || "").slice(0, 16).replace("T", " "))} 取得)</h3>${seg(pages.map((p) => [p.name, `${p.label || p.name}${p.status && p.status !== 200 ? ` (${p.status})` : ""}`]), sel?.name, "irpage")}</div>
-      ${a.margin?.length ? `<p class="foot">信用残の履歴 ${a.margin.length} 回(${esc(a.margin[0].date)}〜${esc(a.margin.at(-1).date)})を取り出し済み。stockAI より古い分は「信用残」タブとチャートにつないで表示しています。</p>` : ""}
+    const used = cur.credit.filter((r) => r.source === `${srcLabel}保存`).length;
+    return `<div class="row-head">${seg(ARCHIVE_SOURCES.map(([k, l]) => [k, `${l.replace("保存", "")}${cur.archives?.[k] ? "" : "(なし)"}`]), srcKey, "savedsrc")}<h3>${esc(srcLabel)} 保存分(${esc(String(a.fetchedAt || "").slice(0, 16).replace("T", " "))} 取得)</h3>${seg(pages.map((p) => [p.name, `${p.label || p.name}${p.status && p.status !== 200 ? ` (${p.status})` : ""}`]), sel?.name, "irpage")}</div>
+      ${a.margin?.length ? `<p class="foot">信用残の履歴 ${a.margin.length} 回(${esc(a.margin[0].date)}〜${esc(a.margin.at(-1).date)})。このうち stockAI に無い日付の ${used} 回を「信用残」タブとチャートにつないでいます(同じ日付は stockAI を優先)。</p>` : ""}
       ${sel ? `<p class="foot"><a href="${esc(sel.url)}" target="_blank" rel="noopener">${esc(sel.url)}</a>${sel.title ? ` · ${esc(sel.title)}` : ""}</p>${tables || empty("このページに表はありませんでした。")}` : empty("保存されたページがありません。")}`;
   }
 
@@ -935,21 +940,34 @@
   }
 
   // =====================================================================
-  // IRBANK 保存
+  // 保存データ(株探=毎週の定期取得 / IRBANK=一度きりの保存)
   // =====================================================================
   async function renderArchive() {
     const body = $("#archiveBody");
-    if (S.archiveIndex === undefined) { body.innerHTML = '<p class="muted pad">読み込み中…</p>'; S.archiveIndex = await SRData.own("irbank/index").catch(() => null); }
-    const ix = S.archiveIndex;
-    const how = `<section class="panel prose"><h3>取得のしかた</h3><ol><li>GitHub のこのリポジトリの <b>Settings → Secrets and variables → Actions</b> に <code>FS_PAGES_PASSWORD</code>(このページと同じパスワード)を登録。</li><li><b>Actions → IRBANK archive → Run workflow</b>。対象は Future Sight の全銘柄(コードを指定すればその銘柄だけ)。1回の実行は最大約5時間で区切り、続きは次の実行(毎日自動でも再開)で未取得の銘柄から進めます。</li><li>取得したページの表を JSON にして <code>data/irbank/</code> に暗号化して保存し、生の HTML は暗号化した tar を GitHub Release(<code>irbank-raw-*</code>)に置きます。</li></ol><p class="muted">IRBANK への負荷を抑えるため、リクエストの間隔は既定で 1.5 秒以上あけています。</p></section>`;
-    if (!ix) { body.innerHTML = `${empty("まだ保存データがありません(ワークフローが一度も成功していません)。")}${how}`; return; }
-    const stocks = Object.entries(ix.stocks || {}).sort((a, b) => a[0].localeCompare(b[0]));
-    const total = S.preds.length; const done = stocks.filter(([, s]) => s.status === "ok").length;
-    const pageNames = [...new Set(stocks.flatMap(([, s]) => Object.keys(s.pages || {})))].sort();
-    body.innerHTML = `<div class="cards"><article><span>取得済み銘柄</span><strong>${done}<small>/ ${total}</small></strong><em>最終更新 ${esc(String(ix.updatedAt || "").slice(0, 16).replace("T", " "))}</em></article><article><span>信用残の履歴を持つ銘柄</span><strong>${stocks.filter(([, s]) => s.marginRows > 0).length}</strong><em>最古 ${esc(stocks.map(([, s]) => s.marginFrom).filter(Boolean).sort()[0] || "—")}</em></article><article><span>保存したページの種類</span><strong>${pageNames.length}</strong><em>${esc(pageNames.slice(0, 8).join(", "))}${pageNames.length > 8 ? "…" : ""}</em></article><article><span>生 HTML のアーカイブ</span><strong>${(ix.releases || []).length}<small>本</small></strong><em>${esc((ix.releases || []).at(-1)?.tag || "—")}</em></article></div>
-      ${how}
-      <div class="table-wrap tall"><table class="grid left"><thead><tr><th>銘柄</th><th>状態</th><th>取得日時</th><th>信用残の履歴</th><th>期間</th>${pageNames.map((p) => `<th>${esc(p)}</th>`).join("")}</tr></thead><tbody>${stocks.map(([code, s]) => `<tr><th><button type="button" class="link" data-arch="${esc(code)}"><b>${esc(code)}</b> ${esc(S.byCode.get(code)?.name || s.name || "")}</button></th><td>${s.status === "ok" ? '<span class="up">ok</span>' : `<span class="down">${esc(s.status || "")}</span>`}</td><td>${esc(String(s.fetchedAt || "").slice(0, 16).replace("T", " "))}</td><td>${fmt(s.marginRows)}回</td><td>${esc(s.marginFrom || "")}〜${esc(s.marginTo || "")}</td>${pageNames.map((p) => `<td>${s.pages?.[p] === undefined ? "" : s.pages[p] === 200 ? "✓" : esc(s.pages[p])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
-    $$("[data-arch]", body).forEach((b) => b.addEventListener("click", () => { S.set.bottomTab = "irbank"; saveSettings(); goChart(b.dataset.arch); }));
+    const need = ARCHIVE_SOURCES.filter(([k]) => S.archiveIndex[k] === undefined);
+    if (need.length) {
+      body.innerHTML = '<p class="muted pad">読み込み中…</p>';
+      await Promise.all(need.map(async ([k]) => { S.archiveIndex[k] = await SRData.own(`${k}/index`).catch(() => null); }));
+    }
+    const how = `<section class="panel prose"><h3>取得のしかた</h3><ol>
+      <li>GitHub のこのリポジトリの <b>Settings → Secrets and variables → Actions</b> に <code>FS_PAGES_PASSWORD</code>(このページと同じパスワード)を登録。</li>
+      <li><b>株探(これからの定期取得)</b>: <b>Actions → Kabutan weekly</b>。毎週水曜の朝に自動で、全銘柄の信用残(週次)と銘柄トップを取り、信用残の履歴を積み増します。初回は Run workflow で <code>mode=full</code> にすると、信用残の過去ページ・決算・大株主などもまとめて取ります。</li>
+      <li><b>IRBANK(今回だけ)</b>: <b>Actions → IRBANK archive</b>。使えなくなる前に、信用残・空売り・貸借などの個別ページを一度だけ全部保存します。1回は約5時間で区切り、全銘柄そろうまで毎日続きを取り、そろった後は IRBANK に接続しません(不要になったらワークフローを無効にしてかまいません)。</li>
+      <li>表は JSON にして <code>data/kabutan/</code>・<code>data/irbank/</code> に暗号化して保存し、生の HTML は暗号化した tar を GitHub Release に置きます。</li></ol>
+      <p class="muted">相手のサーバーへの負荷を抑えるため、robots.txt に従い、リクエストの間隔は既定で 1.5 秒以上あけています。</p></section>`;
+    const section = ([key, label]) => {
+      const ix = S.archiveIndex[key]; const name = label.replace("保存", "");
+      const role = key === "kabutan" ? "毎週の定期取得" : "一度きりの保存";
+      if (!ix) return `<section class="panel"><div class="row-head"><h3>${esc(name)}(${role})</h3></div>${empty("まだ保存データがありません(ワークフローが一度も成功していません)。")}</section>`;
+      const stocks = Object.entries(ix.stocks || {}).sort((a, b) => a[0].localeCompare(b[0]));
+      const done = stocks.filter(([, s]) => s.status === "ok").length;
+      const pageNames = [...new Set(stocks.flatMap(([, s]) => Object.keys(s.pages || {})))].sort();
+      return `<section class="panel"><div class="row-head"><h3>${esc(name)}(${role})</h3><small>最終更新 ${esc(String(ix.updatedAt || "").slice(0, 16).replace("T", " "))} · リクエスト累計 ${fmt(ix.requests)} 回</small></div>
+        <div class="cards"><article><span>取得済み銘柄</span><strong>${done}<small>/ ${S.preds.length}</small></strong><em>${stocks.length - done ? `失敗 ${stocks.length - done}` : "失敗なし"}</em></article><article><span>信用残の履歴を持つ銘柄</span><strong>${stocks.filter(([, s]) => s.marginRows > 0).length}</strong><em>最古 ${esc(stocks.map(([, s]) => s.marginFrom).filter(Boolean).sort()[0] || "—")} · 最新 ${esc(stocks.map(([, s]) => s.marginTo).filter(Boolean).sort().at(-1) || "—")}</em></article><article><span>保存したページの種類</span><strong>${pageNames.length}</strong><em>${esc(pageNames.slice(0, 8).join(", "))}${pageNames.length > 8 ? "…" : ""}</em></article><article><span>生 HTML のアーカイブ</span><strong>${(ix.releases || []).length}<small>本</small></strong><em>${esc((ix.releases || []).at(-1)?.tag || "—")}</em></article></div>
+        <div class="table-wrap tall"><table class="grid left"><thead><tr><th>銘柄</th><th>状態</th><th>取得日時</th><th>信用残の履歴</th><th>期間</th>${pageNames.map((p) => `<th>${esc(p)}</th>`).join("")}</tr></thead><tbody>${stocks.map(([code, s]) => `<tr><th><button type="button" class="link" data-arch="${esc(code)}" data-archsrc="${key}"><b>${esc(code)}</b> ${esc(S.byCode.get(code)?.name || s.name || "")}</button></th><td>${s.status === "ok" ? `<span class="up">ok</span>${s.lastError ? ` <small title="${esc(s.lastError)}">(直近の失敗あり)</small>` : ""}` : `<span class="down">${esc(s.status || "")}</span>`}</td><td>${esc(String(s.fetchedAt || "").slice(0, 16).replace("T", " "))}</td><td>${fmt(s.marginRows)}回</td><td>${esc(s.marginFrom || "")}〜${esc(s.marginTo || "")}</td>${pageNames.map((p) => `<td>${s.pages?.[p] === undefined ? "" : s.pages[p] === 200 ? "✓" : esc(s.pages[p])}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>`;
+    };
+    body.innerHTML = ARCHIVE_SOURCES.map(section).join("") + how;
+    $$("[data-arch]", body).forEach((b) => b.addEventListener("click", () => { S.set.bottomTab = "saved"; S.savedSrc = b.dataset.archsrc; S.irPage = null; saveSettings(); goChart(b.dataset.arch); }));
   }
 
   boot();

@@ -149,6 +149,17 @@
     return b ? a / b - 1 : null;
   }
 
-  const api = { estimateCredit, creditIsUnadjusted, splitFactor, makePriceBook, changeOver, EXPIRY_DAYS };
+  // 複数の取得元の信用残を日付でつなぐ。sources は優先順の [[rows, 既定の出典名], ...]。
+  // 同じ日付は先の取得元を採る(stockAI > 株探保存 > IRBANK保存)
+  function mergeSources(sources) {
+    const byDate = new Map();
+    sources.forEach(([rows, label]) => (rows || []).forEach((r) => {
+      if (!r?.date || byDate.has(r.date) || (num(r.buy) === null && num(r.sell) === null)) return;
+      byDate.set(r.date, { ...r, buy: num(r.buy), sell: num(r.sell), ratio: num(r.ratio), source: typeof label === "function" ? label(r) : label });
+    }));
+    return [...byDate.values()].sort((x, y) => (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
+  }
+
+  const api = { estimateCredit, mergeSources, creditIsUnadjusted, splitFactor, makePriceBook, changeOver, EXPIRY_DAYS };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.SRCredit = api;
 })(typeof window !== "undefined" ? window : globalThis);

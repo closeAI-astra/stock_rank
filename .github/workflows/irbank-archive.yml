@@ -1,7 +1,8 @@
 name: IRBANK archive
 
-# IRBANK の個別銘柄ページ(信用残・空売り・貸借など)を取得し、暗号化して data/irbank/ に保存する。
-# 1回は最大約5時間で区切り、続きは次の実行で未取得の銘柄から再開する(毎日の定期実行でも再開)。
+# IRBANK の個別銘柄ページ(信用残・空売り・貸借など)を、使えなくなる前に一度だけ保存する(暗号化して data/irbank/)。
+# これからの定期取得は株探(kabutan-weekly.yml)。この IRBANK 側は全銘柄そろうまで毎日続きを取り、
+# そろった後(と、3回失敗した銘柄)は IRBANK に接続せずにすぐ終わる。不要になったら Actions でこのワークフローを無効にしてよい。
 on:
   workflow_dispatch:
     inputs:
@@ -17,12 +18,8 @@ on:
         description: "リクエスト間隔(秒)"
         required: false
         default: "1.5"
-      refetch_days:
-        description: "この日数より古い取得済み銘柄も取り直す(0=未取得だけ)"
-        required: false
-        default: "0"
   schedule:
-    - cron: "17 18 * * *" # 毎日 03:17 JST(未取得・7日より古い銘柄を進める)
+    - cron: "17 18 * * *" # 毎日 03:17 JST(未取得の銘柄だけ進める。そろったら何もしない)
 
 permissions:
   contents: write
@@ -53,11 +50,10 @@ jobs:
         env:
           FS_PAGES_PASSWORD: ${{ secrets.FS_PAGES_PASSWORD }}
         run: |
-          python scripts/irbank_archive.py \
+          python scripts/stock_archive.py --source irbank \
             --codes "${{ inputs.codes }}" \
             --max-minutes "${{ inputs.max_minutes || '300' }}" \
             --delay "${{ inputs.delay || '1.5' }}" \
-            --refetch-days "${{ inputs.refetch_days || (github.event_name == 'schedule' && '7') || '0' }}" \
             --raw-out raw.tar.gz.enc \
             --release-tag "irbank-raw-${{ github.run_id }}"
       - name: Upload raw HTML (encrypted) to a release

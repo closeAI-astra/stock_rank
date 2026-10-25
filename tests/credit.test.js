@@ -83,4 +83,12 @@ const days = (from, n, price) => {
   const rows = [{ date: "2026-01-02", sell: 100 }, { date: "2026-01-09", sell: 110 }, { date: "2026-01-30", sell: 150 }];
   assert.ok(Math.abs(C.changeOver(rows, "sell", 4) - 0.5) < 1e-12);
 }
+// 8) 取得元のつなぎ: 同じ日付は stockAI > 株探保存 > IRBANK保存、隙間は後ろの取得元で埋める
+{
+  const base = [{ date: "2026-01-09", buy: 10, sell: 1 }, { date: "2026-01-23", buy: 12, sell: 1 }];
+  const kab = [{ date: "2026-01-16", buy: 11, sell: 1 }, { date: "2026-01-23", buy: 99, sell: 9 }, { date: "2026-01-30", buy: 13, sell: 1 }];
+  const irb = [{ date: "2020-01-10", buy: 5, sell: 1 }, { date: "2026-01-16", buy: 77, sell: 7 }, { date: "2020-01-17", buy: null, sell: null }];
+  const m = C.mergeSources([[base, (r) => r.source || "stockAI"], [kab, "株探保存"], [irb, "IRBANK保存"]]);
+  assert.deepStrictEqual(m.map((r) => [r.date, r.buy, r.source]), [["2020-01-10", 5, "IRBANK保存"], ["2026-01-09", 10, "stockAI"], ["2026-01-16", 11, "株探保存"], ["2026-01-23", 12, "stockAI"], ["2026-01-30", 13, "株探保存"]]);
+}
 console.log("credit tests: ok");

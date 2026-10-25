@@ -16,7 +16,7 @@
       <a href="#chart" data-nav="chart">チャート</a>
       <a href="#rank" data-nav="rank">ランキング・信用</a>
       <a href="#macro" data-nav="macro">マクロ・貿易</a>
-      <a href="#archive" data-nav="archive">IRBANK 保存</a>
+      <a href="#archive" data-nav="archive">保存データ</a>
       <a href="#about" data-nav="about">使い方</a>
     </nav>
     <div class="topbar-right">
@@ -99,7 +99,7 @@
 
     <!-- IRBANK 保存 -->
     <section class="view page" data-view="archive">
-      <div class="page-head"><h1>IRBANK 保存データ</h1><p>IRBANK の個別銘柄ページ(信用残・空売り・貸借など)を GitHub Actions で取得し、同じパスワードで暗号化してこのリポジトリに保存したもの。</p></div>
+      <div class="page-head"><h1>保存データ(株探・IRBANK)</h1><p>GitHub Actions で取得し、同じパスワードで暗号化してこのリポジトリに保存したもの。<b>株探</b>は毎週の定期取得(信用残の週次を積み増す)、<b>IRBANK</b> は使えなくなる前の一度きりの保存です。</p></div>
       <div id="archiveBody"></div>
     </section>
 
@@ -110,7 +110,7 @@
         <h2>データの出どころ</h2>
         <ul>
           <li>株価・AI予測・株探/IRBANK の企業データ・信用残・貿易統計: <b>stockAI(Future Sight)</b> が公開している暗号化データを、このページがブラウザ内で復号して表示します。Future Sight と同じパスワードで開きます。</li>
-          <li>IRBANK 保存データ: このリポジトリの GitHub Actions(<code>.github/workflows/irbank-archive.yml</code>)が取得したものです。</li>
+          <li>保存データ: このリポジトリの GitHub Actions が取得したものです。株探(<code>kabutan-weekly.yml</code>、毎週水曜の朝)が定期取得の本線で、IRBANK(<code>irbank-archive.yml</code>)は使えなくなる前の一度きりの保存です。信用残は、stockAI に無い日付だけを株探保存 → IRBANK保存の順でつなぎます。</li>
           <li>チャート描画: TradingView の <a href="https://github.com/tradingview/lightweight-charts" target="_blank" rel="noopener">Lightweight Charts™</a>(Apache-2.0)。</li>
         </ul>
         <h2>チャートの操作</h2>
@@ -130,8 +130,10 @@
         </ol>
         <p>最初の観測日は「その日の終値で建てた」と置くので、履歴の最初の約半年は 0% 寄りに出ます(表では薄く表示)。株式分割は、分割日の前後の残高の跳びから信用残が未調整かを自動判定して、金額が連続するように揃えます。一般信用・貸借の区別、現引き・現渡しは残高からは分からないため、あくまで目安です。</p>
         <p>全銘柄合計の推定損益率は、各銘柄の金額とコストを足し合わせてから割ったもの(金額加重)です。</p>
-        <h2>IRBANK の保存</h2>
-        <p>GitHub の Actions タブで <b>IRBANK archive</b> を手動実行すると、Future Sight の対象銘柄について IRBANK の個別ページを取得します。途中で止まっても、次の実行は未取得の銘柄から続けます。リポジトリの Secrets に <code>FS_PAGES_PASSWORD</code>(このページと同じパスワード)が必要です。</p>
+        <h2>株探・IRBANK の保存</h2>
+        <p><b>株探(これから)</b>: GitHub の Actions で <b>Kabutan weekly</b> が毎週水曜の朝に動き、Future Sight の対象銘柄の信用残(週次)と銘柄トップを取って、信用残の履歴を積み増します。初回は手動で <code>mode=full</code> にすると、信用残の過去ページや決算・大株主のページもまとめて取ります。</p>
+        <p><b>IRBANK(今回だけ)</b>: <b>IRBANK archive</b> を一度実行すると、信用残・空売り・貸借などの個別ページをすべて保存します。途中で止まっても毎日続きを取り、全銘柄そろった後は IRBANK に接続しません。</p>
+        <p>どちらもリポジトリの Secrets に <code>FS_PAGES_PASSWORD</code>(このページと同じパスワード)が必要です。</p>
         <p class="muted">表示している数値は情報提供のためのもので、投資助言ではありません。</p>
       </div>
     </section>

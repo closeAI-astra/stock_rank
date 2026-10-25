@@ -1,0 +1,89 @@
+name: Kabutan weekly
+
+# 株探から、stockAI(Future Sight)の対象銘柄の信用残(週次)と銘柄トップを取得し、暗号化して data/kabutan/ に積み増す。
+# IRBANK の代わりの定期取得。信用残は毎週火曜の夕方に前週金曜申込分が出るので、水曜の朝に取る。
+# 初回(と、たまに)は mode=full で、信用残の過去ページ・決算・大株主などもまとめて取る。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "weekly=信用残の1ページ目とトップ / full=過去ページ・決算なども全部"
+        required: false
+        default: "weekly"
+        type: choice
+        options: [weekly, full]
+      codes:
+        description: "銘柄コード(カンマ区切り。空=Future Sight の全銘柄)"
+        required: false
+        default: ""
+      max_minutes:
+        description: "この実行の上限(分)"
+        required: false
+        default: "300"
+      delay:
+        description: "リクエスト間隔(秒)"
+        required: false
+        default: "1.5"
+  schedule:
+    - cron: "23 21 * * 2" # 毎週水曜 06:23 JST
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kabutan-archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install "cryptography==43.0.3"
+      - name: Check secret
+        env:
+          FS_PAGES_PASSWORD: ${{ secrets.FS_PAGES_PASSWORD }}
+        run: |
+          if [ -z "$FS_PAGES_PASSWORD" ]; then
+            echo "::error::Secrets に FS_PAGES_PASSWORD(Future Sight と同じパスワード)を登録してください。"
+            exit 1
+          fi
+      - name: Archive Kabutan pages
+        env:
+          FS_PAGES_PASSWORD: ${{ secrets.FS_PAGES_PASSWORD }}
+          MODE: ${{ inputs.mode || 'weekly' }}
+        run: |
+          # weekly は5日より古い銘柄(=先週取った銘柄)を取り直す。full は指定した銘柄・全銘柄を取り直す
+          if [ "$MODE" = "full" ]; then REFETCH=0.01; RAW="--raw-out raw.tar.gz.enc --release-tag kabutan-raw-${{ github.run_id }}"; else REFETCH=5; RAW=""; fi
+          python scripts/stock_archive.py --source kabutan --mode "$MODE" \
+            --codes "${{ inputs.codes }}" \
+            --max-minutes "${{ inputs.max_minutes || '300' }}" \
+            --delay "${{ inputs.delay || '1.5' }}" \
+            --refetch-days "$REFETCH" $RAW
+      - name: Upload raw HTML (encrypted) to a release
+        if: ${{ !cancelled() && hashFiles('raw.tar.gz.enc') != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "kabutan-raw-${{ github.run_id }}" raw.tar.gz.enc \
+            --target "${{ github.sha }}" --prerelease \
+            --title "Kabutan raw HTML ${{ github.run_id }}" \
+            --notes "株探の生 HTML(暗号化)。復号: python scripts/decrypt_raw.py raw.tar.gz.enc raw.tar.gz"
+      - name: Commit
+        if: ${{ !cancelled() }}
+        run: |
+          git config user.name "stock-rank-bot"
+          git config user.email "stock-rank-bot@users.noreply.github.com"
+          if [ ! -d data/kabutan ]; then echo "保存データなし"; exit 0; fi
+          git add data/kabutan
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -m "Kabutan ${{ inputs.mode || 'weekly' }} $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3 4; do
+            git pull --rebase origin "${{ github.ref_name }}" && git push origin "HEAD:${{ github.ref_name }}" && exit 0
+            sleep $((i * 5))
+          done
+          exit 1

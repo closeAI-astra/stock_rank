@@ -1,6 +1,8 @@
-"""テスト用の偽 IRBANK(IRBANK_BASE=http://127.0.0.1:PORT で irbank_archive.py を向ける)。
+"""テスト用の偽 IRBANK・株探。
 
-  python tests/fake_irbank.py PORT
+  python tests/fake_sites.py PORT
+  IRBANK_BASE=http://127.0.0.1:PORT または KABUTAN_BASE=http://127.0.0.1:PORT で stock_archive.py を向ける
+  (株探は /stock/... のパス、IRBANK は /{コード}/... のパス)
 """
 import datetime as dt
 import random
@@ -28,10 +30,35 @@ class H(BaseHTTPRequestHandler):
         b = body.encode("utf-8")
         self.send_response(status); self.send_header("Content-Type", "text/html; charset=utf-8"); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
+    def kabutan(self, u):
+        q = {k: v[0] for k, v in parse_qs(u.query).items()}; code = q.get("code", "")
+        if code == "9999":
+            return self.send(404, "no such stock")
+        if u.path in ("/stock/", "/stock"):
+            return self.send(200, f"<html><head><title>{code} 株探</title></head><body><h2>株価指標</h2><table><tr><th>PER</th><th>PBR</th><th>利回り</th><th>信用倍率</th></tr><tr><td>12.3倍</td><td>1.1倍</td><td>2.5%</td><td>4.2倍</td></tr></table>"
+                             f"<a href='/stock/kabuka?code={code}&ashi=shin'>信用残</a><a href='/stock/finance?code={code}'>決算</a><a href='/stock/kabuka?code={code}&ashi=day'>時系列</a><a href='/stock/news?code={code}'>ニュース</a><a href='/themes/?theme=x'>テーマ</a></body></html>")
+        if u.path == "/stock/kabuka" and q.get("ashi") == "shin":
+            page = int(q.get("page", "1"))
+            end = dt.date(2026, 10, 16) - dt.timedelta(weeks=20 * (page - 1))
+            rnd = random.Random(code + str(page)); rows = []; d = end
+            for _ in range(20):
+                b, s_ = rnd.randint(100000, 3000000), rnd.randint(10000, 900000)
+                rows.append(f"<tr><th>{d:%y/%m/%d}</th><td>1,234.5</td><td>+1.2%</td><td>{s_:,}</td><td>▲1,000</td><td>{b:,}</td><td>+2,000</td><td>{b / s_:.2f}</td></tr>")
+                d -= dt.timedelta(weeks=1)
+            nav = "".join(f"<a href='?code={code}&ashi=shin&page={p}'>{p}</a>" for p in range(1, 4))
+            return self.send(200, f"<html><body><h2>信用残推移</h2><table><thead><tr><th>日付</th><th>終値</th><th>前週比</th><th>売り残</th><th>前週比</th><th>買い残</th><th>前週比</th><th>倍率</th></tr></thead><tbody>{''.join(rows)}</tbody></table>{nav}</body></html>")
+        if u.path == "/stock/kabuka":
+            return self.send(200, "<html><body><table><tr><th>日付</th><th>終値</th></tr><tr><td>26/10/23</td><td>1,234</td></tr></table></body></html>")
+        if u.path == "/stock/finance":
+            return self.send(200, "<html><body><h2>通期</h2><table><tr><th>決算期</th><th>売上高</th><th>営業益</th></tr><tr><td>2026.03</td><td>48,036,704</td><td>4,795,586</td></tr></table></body></html>")
+        return self.send(404, "not found")
+
     def do_GET(self):
         u = urlparse(self.path); parts = [p for p in u.path.split("/") if p]
         if u.path == "/robots.txt":
             return self.send(200, "User-agent: *\nDisallow: /login\n")
+        if u.path.startswith("/stock"):
+            return self.kabutan(u)
         if not parts or not parts[0].isdigit():
             return self.send(404, "not found")
         code = parts[0]

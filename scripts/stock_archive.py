@@ -1,18 +1,24 @@
-"""IRBANK の個別銘柄ページを取得して保存する(GitHub Actions 用)。
+"""株探・IRBANK の個別銘柄ページを取得して保存する(GitHub Actions 用)。
 
-IRBANK が使えなくなる前に、stockAI(Future Sight)の対象銘柄について
-  https://irbank.net/{コード}            … 銘柄トップ(ここから個別ページのリンクを集める)
-  https://irbank.net/{コード}/margin など … 信用残・空売り・貸借などの個別ページ(リンクから自動で見つける)
-を取得し、
-  data/irbank/stocks/{コード}.json.enc … ページごとの表(見出し・行)と、信用残の正規化した履歴(date/buy/sell/ratio)
-  data/irbank/index.json.enc           … 銘柄ごとの取得状況
+取得元(--source):
+  kabutan … これからの定期取得の本線。毎週、信用残(https://kabutan.jp/stock/kabuka?code={コード}&ashi=shin)と
+             銘柄トップを取り、信用残の履歴を週ごとに積み増す。--mode full で決算・大株主などのページと、
+             信用残の過去ページ(ページ送り)もまとめて取る(初回の取り込み用)。
+  irbank  … IRBANK が使えなくなる前の一度きりの保存。銘柄トップ(https://irbank.net/{コード})のリンクから
+             信用残・空売り・貸借などの個別ページを自動で見つけて全部取る。全銘柄そろったら、それ以上は取りに行かない。
+
+stockAI(Future Sight)の対象銘柄について、
+  data/{source}/stocks/{コード}.json.enc … ページごとの表(見出し・行)と、信用残の正規化した履歴(date/buy/sell/ratio)
+  data/{source}/index.json.enc           … 銘柄ごとの取得状況
 を Future Sight と同じ鍵で暗号化して書く。生の HTML は --raw-out に暗号化した tar.gz でまとめる(Release に置く)。
 
 ・途中で止まっても、次の実行は未取得(または --refetch-days より古い)銘柄から再開する。
-・取得に失敗した銘柄は、前回までに保存した良いデータを上書きしない(IRBANK が止まった後に実行しても壊れない)。
+・信用残の履歴は前回までの保存分と日付で合わせて積み増す(週次の取得で 1 ページ目しか取らなくても履歴が伸びる)。
+・取得に失敗した銘柄は、前回までに保存した良いデータを上書きしない(取得元が止まった後に実行しても壊れない)。
 ・robots.txt に従い、リクエストの間隔は --delay 秒(既定 1.5 秒)以上あける。
 
-  FS_PAGES_PASSWORD=... python scripts/irbank_archive.py [--codes 7203,6758] [--max-minutes 300]
+  FS_PAGES_PASSWORD=... python scripts/stock_archive.py --source kabutan [--mode weekly|full] [--codes 7203,6758]
+  FS_PAGES_PASSWORD=... python scripts/stock_archive.py --source irbank
 """
 from __future__ import annotations
 
@@ -36,14 +42,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from fs_crypto import FSData, decrypt_json, encrypt_bytes, encrypt_json  # noqa: E402
 
-BASE = os.environ.get("IRBANK_BASE", "https://irbank.net")  # テストではローカルの偽サーバーに向ける
-BASE_HOST = urllib.parse.urlparse(BASE).netloc
 UA = "Mozilla/5.0 (compatible; stock-rank-archiver/1.0; +https://github.com/closeAI-astra/stock_rank)"
 JST = dt.timezone(dt.timedelta(hours=9))
-# 先に取るページ(信用残まわり)。見つかったその他のページはこの後に取る
-PRIORITY = ["margin", "short", "lending", "kashikabu", "zandaka", "shinyo", "holder", "shareholder", "dividend", "results", "value"]
-LABELS = {"margin": "信用残", "short": "空売り", "lending": "貸借取引", "holder": "大株主", "dividend": "配当", "results": "決算", "value": "株価指標", "top": "銘柄トップ"}
-SKIP = {"login", "signup", "logout", "bookmark", "favorite", "rss", "search", "print"}
+# ページ送りとみなすクエリ(これ以外が違うリンクは別ページ)
+PAGING_KEYS = {"page", "p", "pg", "y", "year"}
+GIVE_UP_AFTER = 3  # 見つからない銘柄(上場廃止など)は3回失敗したら定期実行では諦める
 
 
 def now_iso() -> str:
@@ -253,18 +256,125 @@ def extract_margin(tables: list[dict], year_hint: int) -> list[dict]:
             out[d] = rec
     return [out[k] for k in sorted(out)]
 
+# ---------------------------------------------------------------------------
+# 取得元ごとの違い(ページの場所・ページ送り)
+# ---------------------------------------------------------------------------
+class Source:
+    name = ""
+    label = ""
+    default_base = ""
+    labels: dict[str, str] = {}
+
+    def __init__(self, base: str | None = None):
+        self.base = (base or os.environ.get(f"{self.name.upper()}_BASE") or self.default_base).rstrip("/")
+        self.host = urllib.parse.urlparse(self.base).netloc
+
+    def top_url(self, code: str) -> str:
+        raise NotImplementedError
+
+    def subpages(self, code: str, links: list[str], mode: str) -> list[tuple[str, str]]:
+        """[(ページ名, URL)]。先に取るべきもの(信用残)から並べる。"""
+        raise NotImplementedError
+
+    def is_margin_page(self, name: str) -> bool:
+        return name in ("margin", "zandaka", "shinyo")
+
+    def abs(self, href: str, page_url: str | None = None) -> urllib.parse.ParseResult:
+        return urllib.parse.urlparse(urllib.parse.urljoin(page_url or self.base + "/", href))
+
+    def follow_links(self, links: list[str], page_url: str, seen: set[str]) -> list[str]:
+        """同じページの続き(?page=2・?p=2・/margin/2019 のような年・ページ送り)の URL。"""
+        base = urllib.parse.urlparse(page_url)
+        bq = dict(urllib.parse.parse_qsl(base.query))
+        out = []
+        for href in links:
+            u = self.abs(href, page_url)
+            if u.netloc != self.host:
+                continue
+            q = dict(urllib.parse.parse_qsl(u.query))
+            same_path = u.path.rstrip("/") == base.path.rstrip("/")
+            changed = {k for k in set(q) | set(bq) if q.get(k) != bq.get(k)}
+            query_page = same_path and changed and changed <= PAGING_KEYS
+            sub_page = not u.query and re.match(rf"^{re.escape(base.path.rstrip('/'))}/[0-9A-Za-z_\-]+/?$", u.path) and not bq
+            full = urllib.parse.urlunparse(u._replace(fragment=""))
+            if (query_page or sub_page) and full not in seen:
+                seen.add(full)
+                out.append(full)
+        return out
+
+
+class IRBank(Source):
+    name, label, default_base = "irbank", "IRBANK", "https://irbank.net"
+    PRIORITY = ["margin", "short", "lending", "kashikabu", "zandaka", "shinyo", "holder", "shareholder", "dividend", "results", "value"]
+    labels = {"margin": "信用残", "short": "空売り", "lending": "貸借取引", "holder": "大株主", "dividend": "配当", "results": "決算", "value": "株価指標", "top": "銘柄トップ"}
+    SKIP = {"login", "signup", "logout", "bookmark", "favorite", "rss", "search", "print"}
+
+    def top_url(self, code):
+        return f"{self.base}/{code}"
+
+    def subpages(self, code, links, mode):
+        names = []
+        for href in links:
+            u = self.abs(href)
+            if u.netloc and u.netloc != self.host:
+                continue
+            m = re.match(rf"^/{re.escape(code)}/([A-Za-z0-9_\-]+)/?$", u.path)
+            if m and m.group(1) not in self.SKIP and m.group(1) not in names:
+                names.append(m.group(1))
+        names.sort(key=lambda n: (self.PRIORITY.index(n) if n in self.PRIORITY else len(self.PRIORITY), n))
+        return [(n, f"{self.base}/{code}/{n}") for n in names]
+
+
+class Kabutan(Source):
+    name, label, default_base = "kabutan", "株探", "https://kabutan.jp"
+    labels = {"top": "銘柄トップ", "margin": "信用残(週次)", "finance": "決算", "holder": "大株主", "kabuka_day": "株価(日足)", "kabuka_wek": "株価(週足)", "kabuka_mon": "株価(月足)"}
+    SKIP_PATHS = {"/stock/news", "/stock/kabuka_chart", "/stock/chart"}
+
+    def top_url(self, code):
+        return f"{self.base}/stock/?code={code}"
+
+    def margin_url(self, code):
+        return f"{self.base}/stock/kabuka?code={code}&ashi=shin"
+
+    def subpages(self, code, links, mode):
+        pages = [("margin", self.margin_url(code))]
+        if mode != "full":
+            return pages
+        pages += [("finance", f"{self.base}/stock/finance?code={code}"), ("holder", f"{self.base}/stock/holder?code={code}")]
+        known = {u for _, u in pages}
+        # 銘柄トップにある、この銘柄の他のページ(/stock/xxx?code=コード)も取る
+        for href in links:
+            u = self.abs(href)
+            if u.netloc and u.netloc != self.host or not u.path.startswith("/stock/") or u.path.rstrip("/") in self.SKIP_PATHS:
+                continue
+            q = dict(urllib.parse.parse_qsl(u.query))
+            if q.get("code") != code or set(q) & PAGING_KEYS:
+                continue
+            extra = "_".join(v for k, v in sorted(q.items()) if k != "code")
+            name = (u.path.rstrip("/").rsplit("/", 1)[-1] or "top") + (f"_{extra}" if extra else "")
+            if name in ("top", "kabuka_shin"):
+                continue
+            url = urllib.parse.urlunparse(u._replace(netloc=self.host, scheme=urllib.parse.urlparse(self.base).scheme, fragment=""))
+            if url not in known and name not in {n for n, _ in pages}:
+                known.add(url)
+                pages.append((name, url))
+        return pages
+
+
+SOURCES = {"irbank": IRBank, "kabutan": Kabutan}
+
 
 # ---------------------------------------------------------------------------
 # 取得
 # ---------------------------------------------------------------------------
 class Fetcher:
-    def __init__(self, delay: float):
+    def __init__(self, delay: float, base: str):
         self.delay = delay
         self.last = 0.0
         self.count = 0
         self.robots = urllib.robotparser.RobotFileParser()
         try:
-            self.robots.set_url(BASE + "/robots.txt")
+            self.robots.set_url(base + "/robots.txt")
             self.robots.read()
         except Exception as e:  # robots が読めないときは控えめに進める
             print(f"robots.txt を読めませんでした: {e}", flush=True)
@@ -274,7 +384,7 @@ class Fetcher:
         return self.robots is None or self.robots.can_fetch(UA, url)
 
     def get(self, url: str) -> tuple[int, str, str]:
-        """(status, html, 最終URL)。404 などは status で返し、通信エラーは status=0。"""
+        """(status, html, 最終URL)。404 などは status で返し、通信エラーは status=0、robots で禁止は 999。"""
         if not self.allowed(url):
             return 999, "", url
         for attempt in range(4):
@@ -304,56 +414,27 @@ class Fetcher:
         return 0, "", url
 
 
-def subpage_links(links: list[str], code: str) -> list[str]:
-    names = []
-    for href in links:
-        u = urllib.parse.urlparse(urllib.parse.urljoin(BASE + "/", href))
-        if u.netloc and u.netloc != BASE_HOST:
-            continue
-        m = re.match(rf"^/{re.escape(code)}/([A-Za-z0-9_\-]+)/?$", u.path)
-        if m and m.group(1) not in SKIP and m.group(1) not in names:
-            names.append(m.group(1))
-    return sorted(names, key=lambda n: (PRIORITY.index(n) if n in PRIORITY else len(PRIORITY), n))
-
-
-def follow_links(links: list[str], code: str, name: str, seen: set[str]) -> list[str]:
-    """同じページの続き(?p=2 や /margin/2019 のような年・ページ送り)の URL。"""
-    out = []
-    for href in links:
-        full = urllib.parse.urljoin(f"{BASE}/{code}/{name}", href)
-        u = urllib.parse.urlparse(full)
-        if u.netloc != BASE_HOST:
-            continue
-        path_ok = u.path.rstrip("/") == f"/{code}/{name}" and u.query
-        sub_ok = re.match(rf"^/{re.escape(code)}/{re.escape(name)}/[0-9A-Za-z_\-]+/?$", u.path)
-        if (path_ok or sub_ok) and full not in seen:
-            seen.add(full)
-            out.append(full)
-    return out
-
-
-def archive_stock(f: Fetcher, code: str, opts, raw: dict[str, bytes], year_hint: int) -> dict:
+def archive_stock(src: Source, f: Fetcher, code: str, opts, raw: dict[str, bytes], year_hint: int) -> dict:
     pages = []
-    status, html, final = f.get(f"{BASE}/{code}")
+    status, html, final = f.get(src.top_url(code))
     if status != 200:
         return {"status": f"http_{status}", "pages": []}
     raw[f"{code}/top.html"] = html.encode("utf-8")
     top = parse_html(html)
-    pages.append({"name": "top", "label": LABELS["top"], "url": final, "status": status, "title": top["title"], "tables": top["tables"]})
-    names = subpage_links(top["links"], code)[: opts.max_subpages]
+    pages.append({"name": "top", "label": src.labels.get("top", "top"), "url": final, "status": status, "title": top["title"], "tables": top["tables"]})
     margin_tables = []
-    other_codes = sorted({m.group(1) for h in top["links"] for m in [re.match(r"^/(E\d{5})/", urllib.parse.urlparse(urllib.parse.urljoin(BASE + "/", h)).path)] if m})
-    for name in names:
-        url = f"{BASE}/{code}/{name}"
+    other_codes = sorted({m.group(1) for h in top["links"] for m in [re.match(r"^/(E\d{5})/", src.abs(h).path)] if m})
+    follow = opts.max_follow if (src.name == "irbank" or opts.mode == "full") else 0
+    for name, url in src.subpages(code, top["links"], opts.mode)[: opts.max_subpages]:
         st, body, fin = f.get(url)
-        page = {"name": name, "label": LABELS.get(name, name), "url": fin, "status": st, "title": "", "tables": []}
+        page = {"name": name, "label": src.labels.get(name, name), "url": fin, "status": st, "title": "", "tables": []}
         if st == 200:
             raw[f"{code}/{name}.html"] = body.encode("utf-8")
             parsed = parse_html(body)
             page["title"], page["tables"] = parsed["title"], parsed["tables"]
             seen = {url, fin}
             bodies = {hash(body)}  # ?p=1 のように最初のページと同じ中身は二重に持たない
-            more = follow_links(parsed["links"], code, name, seen)[: opts.max_follow]
+            more = src.follow_links(parsed["links"], fin, seen)[:follow]
             for k, murl in enumerate(more):
                 st2, body2, _ = f.get(murl)
                 if st2 != 200 or hash(body2) in bodies:
@@ -361,12 +442,13 @@ def archive_stock(f: Fetcher, code: str, opts, raw: dict[str, bytes], year_hint:
                 bodies.add(hash(body2))
                 raw[f"{code}/{name}__{k + 1}.html"] = body2.encode("utf-8")
                 p2 = parse_html(body2)
+                mu = urllib.parse.urlparse(murl)
                 for t in p2["tables"]:
-                    t["title"] = f"{t['title']} ({urllib.parse.urlparse(murl).query or urllib.parse.urlparse(murl).path.rsplit('/', 1)[-1]})".strip()
+                    t["title"] = f"{t['title']} ({mu.query or mu.path.rsplit('/', 1)[-1]})".strip()
                 page["tables"].extend(p2["tables"])
-                more.extend(u for u in follow_links(p2["links"], code, name, seen) if len(more) < opts.max_follow)
+                more.extend(u for u in src.follow_links(p2["links"], murl, seen) if len(more) < follow)
             page["followed"] = len(more)
-            if name in ("margin", "zandaka", "shinyo") or any("売残" in "".join(t.get("headers") or []) for t in page["tables"]):
+            if src.is_margin_page(name) or any("売残" in "".join(t.get("headers") or []) for t in page["tables"]):
                 margin_tables.extend(page["tables"])
         pages.append(page)
     if not margin_tables:  # トップに信用残の表がある場合
@@ -376,22 +458,32 @@ def archive_stock(f: Fetcher, code: str, opts, raw: dict[str, bytes], year_hint:
     return {"status": "ok" if ok else "failed", "pages": pages, "margin": margin, "edinetCodes": other_codes}
 
 
+def merge_margin(old: list[dict], new: list[dict]) -> list[dict]:
+    """日付で合わせる(同じ日付は新しい取得を優先)。週次の 1 ページ目だけでも履歴が積み上がる。"""
+    by = {r["date"]: r for r in old or []}
+    by.update({r["date"]: r for r in new or []})
+    return [by[k] for k in sorted(by)]
+
+
 # ---------------------------------------------------------------------------
 # 本体
 # ---------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--source", choices=sorted(SOURCES), default="kabutan")
+    ap.add_argument("--mode", choices=["weekly", "full"], default="weekly", help="株探: weekly=信用残の1ページ目とトップ / full=決算・大株主なども含めて全部・信用残の過去ページも")
     ap.add_argument("--codes", default="", help="カンマ区切りの銘柄コード(空=Future Sight の全銘柄)")
     ap.add_argument("--max-minutes", type=float, default=300)
     ap.add_argument("--delay", type=float, default=1.5, help="リクエスト間隔(秒)")
     ap.add_argument("--max-subpages", type=int, default=40)
     ap.add_argument("--max-follow", type=int, default=40, help="1ページあたりの続き(ページ送り)の上限")
     ap.add_argument("--refetch-days", type=float, default=0, help="この日数より古い取得済み銘柄も取り直す(0=未取得だけ)")
-    ap.add_argument("--out", default="data/irbank")
+    ap.add_argument("--out", default="", help="既定は data/{source}")
     ap.add_argument("--raw-out", default="", help="生 HTML の暗号化 tar.gz の出力先")
     ap.add_argument("--release-tag", default="")
     ap.add_argument("--fs-base", default=os.environ.get("FS_BASE", ""), help="Future Sight の配信元(既定は GitHub raw)")
     opts = ap.parse_args()
+    src: Source = SOURCES[opts.source]()
 
     password = os.environ.get("FS_PAGES_PASSWORD", "")
     if not password:
@@ -399,16 +491,18 @@ def main() -> int:
         return 2
     fs = FSData(password, opts.fs_base) if opts.fs_base else FSData(password)
     key = fs.key
-    out = Path(opts.out)
+    out = Path(opts.out or f"data/{src.name}")
     (out / "stocks").mkdir(parents=True, exist_ok=True)
     index_path = out / "index.json.enc"
-    index = decrypt_json(index_path.read_bytes(), key) if index_path.exists() else {"stocks": {}, "releases": []}
+    index = decrypt_json(index_path.read_bytes(), key) if index_path.exists() else {}
+    index.setdefault("source", src.name)
     index.setdefault("stocks", {})
     index.setdefault("releases", [])
 
     dash = fs.json("dashboard")
     names = {p["code"]: p.get("name", "") for p in dash.get("predictions", [])}
-    if opts.codes.strip():
+    explicit = bool(opts.codes.strip())
+    if explicit:
         codes = [c.strip() for c in opts.codes.split(",") if c.strip()]
     else:
         codes = sorted(set(fs.json("stock-detail-index").keys()) | set(names))
@@ -416,20 +510,26 @@ def main() -> int:
 
     def due(c: str) -> bool:
         s = index["stocks"].get(c)
-        if not s or s.get("status") != "ok":
+        if explicit or not s:
             return True
+        if s.get("status") != "ok":
+            return s.get("attempts", 1) < GIVE_UP_AFTER
         if cutoff and s.get("fetchedAt"):
             return dt.datetime.fromisoformat(s["fetchedAt"]) < cutoff
-        return bool(opts.codes.strip())  # 明示した銘柄は取り直す
+        return False
 
     todo = [c for c in codes if due(c)]
     # 未取得 → 失敗 → 古い順
     todo.sort(key=lambda c: (c in index["stocks"], index["stocks"].get(c, {}).get("status") == "ok", index["stocks"].get(c, {}).get("fetchedAt", "")))
-    print(f"対象 {len(codes)} 銘柄 / 今回 {len(todo)} 銘柄(間隔 {opts.delay}s・上限 {opts.max_minutes}分)", flush=True)
+    total_ok = sum(1 for s in index["stocks"].values() if s.get("status") == "ok")
+    print(f"[{src.label}] 対象 {len(codes)} 銘柄 / 今回 {len(todo)} 銘柄(mode={opts.mode}・間隔 {opts.delay}s・上限 {opts.max_minutes}分)", flush=True)
+    if not todo:
+        print(f"取得するものはありません(取得済み {total_ok} 銘柄)。{src.label} には接続しません。", flush=True)
+        return 0
 
-    f = Fetcher(opts.delay)
-    if not f.allowed(f"{BASE}/7203/margin"):
-        print("::warning::robots.txt が個別ページの取得を許可していません。取得できるページだけ進めます。")
+    f = Fetcher(opts.delay, src.base)
+    if not f.allowed(src.top_url(todo[0])):
+        print(f"::warning::robots.txt が {src.label} の銘柄ページの取得を許可していません。取得できるページだけ進めます。")
     deadline = time.time() + opts.max_minutes * 60
     raw: dict[str, bytes] = {}
     year_hint = dt.datetime.now(JST).year
@@ -439,27 +539,33 @@ def main() -> int:
             print(f"時間切れ: 残り {len(todo) - i} 銘柄は次回", flush=True)
             break
         t0 = time.time()
-        res = archive_stock(f, code, opts, raw, year_hint)
+        res = archive_stock(src, f, code, opts, raw, year_hint)
         prev = index["stocks"].get(code, {})
+        doc_path = out / "stocks" / f"{code}.json.enc"
         if res["status"] == "ok":
-            doc = {"code": code, "name": names.get(code, ""), "fetchedAt": now_iso(), "pages": res["pages"], "margin": res["margin"], "edinetCodes": res.get("edinetCodes", []), "release": opts.release_tag or None}
-            (out / "stocks" / f"{code}.json.enc").write_bytes(encrypt_json(doc, key))
-            m = res["margin"]
-            index["stocks"][code] = {"status": "ok", "name": names.get(code, ""), "fetchedAt": doc["fetchedAt"], "marginRows": len(m), "marginFrom": m[0]["date"] if m else None, "marginTo": m[-1]["date"] if m else None, "pages": {p["name"]: p["status"] for p in res["pages"]}}
+            old = decrypt_json(doc_path.read_bytes(), key) if doc_path.exists() else {}
+            fresh = {p["name"] for p in res["pages"]}
+            margin = merge_margin(old.get("margin"), res["margin"])
+            doc = {"code": code, "name": names.get(code, ""), "source": src.name, "fetchedAt": now_iso(), "mode": opts.mode,
+                   # 今回取らなかったページ(週次では決算など)は前回の保存分を残す
+                   "pages": res["pages"] + [p for p in old.get("pages", []) if p.get("name") not in fresh],
+                   "margin": margin, "edinetCodes": res.get("edinetCodes", []) or old.get("edinetCodes", []), "release": opts.release_tag or old.get("release")}
+            doc_path.write_bytes(encrypt_json(doc, key))
+            index["stocks"][code] = {"status": "ok", "name": names.get(code, ""), "fetchedAt": doc["fetchedAt"], "marginRows": len(margin), "marginFrom": margin[0]["date"] if margin else None, "marginTo": margin[-1]["date"] if margin else None, "pages": {p["name"]: p["status"] for p in doc["pages"]}}
             done += 1
         else:
             failed += 1
             if prev.get("status") == "ok":
                 prev["lastError"] = f"{res['status']} {now_iso()}"  # 良い保存データは残す
             else:
-                index["stocks"][code] = {"status": res["status"], "name": names.get(code, ""), "fetchedAt": now_iso(), "pages": {}}
+                index["stocks"][code] = {"status": res["status"], "name": names.get(code, ""), "fetchedAt": now_iso(), "pages": {}, "attempts": prev.get("attempts", 0) + 1}
         m = res.get("margin") or []
-        print(f"[{i + 1}/{len(todo)}] {code} {names.get(code, '')} {res['status']} pages={len(res['pages'])} 信用残={len(m)}回 {time.time() - t0:.0f}s", flush=True)
+        print(f"[{i + 1}/{len(todo)}] {code} {names.get(code, '')} {res['status']} pages={len(res['pages'])} 信用残(今回)={len(m)}回 {time.time() - t0:.0f}s", flush=True)
         if (i + 1) % 10 == 0:  # 途中経過も書いておく(強制終了に備える)
             index["updatedAt"] = now_iso()
             index_path.write_bytes(encrypt_json(index, key))
         if failed >= 15 and done == 0:
-            print("::warning::連続して取得に失敗しています(IRBANK が応答しない可能性)。中断します。")
+            print(f"::warning::連続して取得に失敗しています({src.label} が応答しない可能性)。中断します。")
             break
 
     if raw and opts.raw_out:
@@ -478,11 +584,12 @@ def main() -> int:
     index["requests"] = index.get("requests", 0) + f.count
     index_path.write_bytes(encrypt_json(index, key))
     total_ok = sum(1 for s in index["stocks"].values() if s.get("status") == "ok")
-    print(f"完了: 今回 成功 {done} / 失敗 {failed} · 累計 {total_ok} 銘柄 · リクエスト {f.count} 回", flush=True)
+    left = len([c for c in codes if index["stocks"].get(c, {}).get("status") != "ok"])
+    print(f"完了: 今回 成功 {done} / 失敗 {failed} · 累計 {total_ok} 銘柄 · 未取得 {left} · リクエスト {f.count} 回", flush=True)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as fh:
-            fh.write(f"### IRBANK archive\n\n- 今回: 成功 {done} / 失敗 {failed}\n- 累計: {total_ok}/{len(codes)} 銘柄\n- リクエスト: {f.count} 回\n- 未取得: {len([c for c in codes if index['stocks'].get(c, {}).get('status') != 'ok'])} 銘柄\n")
+            fh.write(f"### {src.label} ({opts.mode})\n\n- 今回: 成功 {done} / 失敗 {failed}\n- 累計: {total_ok}/{len(codes)} 銘柄\n- 未取得: {left} 銘柄\n- リクエスト: {f.count} 回\n")
     return 0
 
 
