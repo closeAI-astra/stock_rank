@@ -57,8 +57,16 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(m[1]["extra"]["終値"], "3,100")
         k = ia.Kabutan("https://kabutan.jp")
         self.assertEqual(k.follow_links(p["links"], k.margin_url("7203"), set()), ["https://kabutan.jp/stock/kabuka?code=7203&ashi=shin&page=2"])
-        self.assertEqual([n for n, _ in k.subpages("7203", p["links"], "weekly")], ["margin"])
+        self.assertEqual([n for n, _ in k.subpages("7203", p["links"], "weekly")], ["margin", "finance"])
         self.assertEqual([n for n, _ in k.subpages("7203", p["links"], "full")], ["margin", "finance", "holder", "kabuka_day"])
+
+    def test_market_pages(self):
+        p = ia.parse_html("<a href='/market/margin'>信用残の推移</a><a href='/7203/margin'>信用残</a><a href='/stock/x?code=7203'>信用倍率</a><a href='/news'>ニュース</a><a href='https://other.example/m'>信用残</a>")
+        self.assertEqual([(n, u) for n, u, _ in ia.IRBank("https://irbank.net").market_pages(p["anchors"], 10)], [("market_margin", "https://irbank.net/market/margin")])
+
+    def test_irbank_edinet_pages(self):
+        p = ia.parse_html("<a href='/7203/margin'>m</a><a href='/E02144/pl'>PL</a><a href='/E02144'>top</a>")
+        self.assertEqual([n for n, _ in ia.IRBank("https://irbank.net").subpages("7203", p["links"], "full")], ["margin", "E02144_pl", "E02144_top"])
 
     def test_merge_margin(self):
         old = [{"date": "2026-01-02", "buy": 1}, {"date": "2026-01-09", "buy": 2}]

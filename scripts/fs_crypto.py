@@ -70,9 +70,15 @@ class FSData:
     def __init__(self, password: str, base: str = FS_RAW_BASE):
         self.base = base if base.endswith("/") else base + "/"
         self.meta = json.loads(http_get(self.base + "enc-meta.json"))
-        self.key = derive_key(password, self.meta["salt"], int(self.meta["iter"]))
-        if not check_key(self.meta, self.key):
-            raise SystemExit("FS_PAGES_PASSWORD が Future Sight のパスワードと一致しません(enc-meta.json の check を復号できない)。")
+        # Secrets に貼り付けたときに前後の空白・改行が入ることがあるので、そのままで合わなければ前後を除いて試す
+        for pw in dict.fromkeys([password, password.strip()]):
+            self.key = derive_key(pw, self.meta["salt"], int(self.meta["iter"]))
+            if check_key(self.meta, self.key):
+                return
+        raise SystemExit(
+            f"FS_PAGES_PASSWORD が Future Sight のパスワードと一致しません(enc-meta.json の check を復号できない)。"
+            f" 登録値は {len(password)} 文字{'(前後に空白・改行あり)' if password != password.strip() else ''}。"
+            " Future Sight のページで入力しているパスワードを、そのまま登録し直してください。")
 
     def json(self, name: str):
         return decrypt_json(http_get(f"{self.base}data/{name}.json.enc"), self.key)

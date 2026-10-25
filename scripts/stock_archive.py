@@ -1,8 +1,9 @@
 """株探・IRBANK の個別銘柄ページを取得して保存する(GitHub Actions 用)。
 
 取得元(--source):
-  kabutan … これからの定期取得の本線。毎週、信用残(https://kabutan.jp/stock/kabuka?code={コード}&ashi=shin)と
-             銘柄トップを取り、信用残の履歴を週ごとに積み増す。--mode full で決算・大株主などのページと、
+  kabutan … これからの定期取得の本線。毎週、信用残(https://kabutan.jp/stock/kabuka?code={コード}&ashi=shin)・
+             決算(https://kabutan.jp/stock/finance?code={コード}、業績・配当)・銘柄トップを取り、信用残の履歴を週ごとに
+             積み増す。--mode full で大株主など銘柄トップからリンクされたページと、
              信用残の過去ページ(ページ送り)もまとめて取る(初回の取り込み用)。
   irbank  … IRBANK が使えなくなる前の一度きりの保存。銘柄トップ(https://irbank.net/{コード})のリンクから
              信用残・空売り・貸借などの個別ページを自動で見つけて全部取る。全銘柄そろったら、それ以上は取りに行かない。
@@ -44,6 +45,8 @@ from fs_crypto import FSData, decrypt_json, encrypt_bytes, encrypt_json  # noqa:
 
 UA = "Mozilla/5.0 (compatible; stock-rank-archiver/1.0; +https://github.com/closeAI-astra/stock_rank)"
 JST = dt.timezone(dt.timedelta(hours=9))
+# 市場全体のページ(東証全体の信用残・空売り・投資部門別など)を、トップページのリンクの文字で探す
+MARKET_RE = re.compile(r"信用(残|取引|倍率|評価)|空売り|貸借|裁定|投資部門|売買動向|騰落")
 # ページ送りとみなすクエリ(これ以外が違うリンクは別ページ)
 PAGING_KEYS = {"page", "p", "pg", "y", "year"}
 GIVE_UP_AFTER = 3  # 見つからない銘柄(上場廃止など)は3回失敗したら定期実行では諦める
@@ -63,6 +66,8 @@ class TableParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.tables: list[dict] = []
         self.links: list[str] = []
+        self.anchors: list[tuple[str, str]] = []  # (href, リンクの文字)。市場全体のページを文字で探すのに使う
+        self._anchor: list[str] | None = None
         self.title = ""
         self._stack: list[dict] = []  # 入れ子の表に対応
         self._cell: list[str] | None = None
@@ -80,6 +85,7 @@ class TableParser(HTMLParser):
             self._skip += 1
         elif tag == "a" and a.get("href"):
             self.links.append(a["href"])
+            self._anchor = [a["href"], ""]
         elif tag == "title":
             self._in_title = True
         elif tag in ("h1", "h2", "h3", "h4"):
@@ -97,6 +103,9 @@ class TableParser(HTMLParser):
             self._cell.append(" ")
 
     def handle_endtag(self, tag):
+        if tag == "a" and self._anchor is not None:
+            self.anchors.append((self._anchor[0], clean(self._anchor[1])))
+            self._anchor = None
         if tag in ("script", "style", "noscript"):
             self._skip = max(0, self._skip - 1)
         elif tag == "title":
@@ -130,6 +139,8 @@ class TableParser(HTMLParser):
     def handle_data(self, data):
         if self._skip:
             return
+        if self._anchor is not None:
+            self._anchor[1] += data
         if self._in_title:
             self.title += data
         if self._heading is not None:
@@ -148,7 +159,7 @@ def parse_html(html: str) -> dict:
     p = TableParser()
     p.feed(html)
     p.close()
-    return {"title": clean(p.title), "tables": p.tables, "links": p.links}
+    return {"title": clean(p.title), "tables": p.tables, "links": p.links, "anchors": p.anchors}
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +287,23 @@ class Source:
         """[(ページ名, URL)]。先に取るべきもの(信用残)から並べる。"""
         raise NotImplementedError
 
+    def market_pages(self, anchors: list[tuple[str, str]], limit: int) -> list[tuple[str, str, str]]:
+        """[(名前, URL, リンクの文字)]。個別銘柄のページ(/7203/... や ?code=)は除く。"""
+        out, seen = [], set()
+        for href, text in anchors:
+            if not MARKET_RE.search(text or ""):
+                continue
+            u = self.abs(href)
+            if u.netloc and u.netloc != self.host or re.match(r"^/(\d{3}[0-9A-Z]|E\d{5})/", u.path) or "code=" in u.query:
+                continue
+            url = urllib.parse.urlunparse(u._replace(netloc=self.host, scheme=urllib.parse.urlparse(self.base).scheme, fragment=""))
+            if url in seen:
+                continue
+            seen.add(url)
+            name = re.sub(r"[^0-9A-Za-z_]+", "_", (u.path.strip("/") or "top") + (f"_{u.query}" if u.query else "")).strip("_")[:60]
+            out.append((name, url, text))
+        return out[:limit]
+
     def is_margin_page(self, name: str) -> bool:
         return name in ("margin", "zandaka", "shinyo")
 
@@ -306,7 +334,8 @@ class Source:
 class IRBank(Source):
     name, label, default_base = "irbank", "IRBANK", "https://irbank.net"
     PRIORITY = ["margin", "short", "lending", "kashikabu", "zandaka", "shinyo", "holder", "shareholder", "dividend", "results", "value"]
-    labels = {"margin": "信用残", "short": "空売り", "lending": "貸借取引", "holder": "大株主", "dividend": "配当", "results": "決算", "value": "株価指標", "top": "銘柄トップ"}
+    labels = {"margin": "信用残", "short": "空売り", "lending": "貸借取引", "holder": "大株主", "dividend": "配当", "results": "決算", "value": "株価指標", "top": "銘柄トップ",
+              "pl": "損益計算書", "bs": "貸借対照表", "cf": "キャッシュフロー"}
     SKIP = {"login", "signup", "logout", "bookmark", "favorite", "rss", "search", "print"}
 
     def top_url(self, code):
@@ -322,7 +351,18 @@ class IRBank(Source):
             if m and m.group(1) not in self.SKIP and m.group(1) not in names:
                 names.append(m.group(1))
         names.sort(key=lambda n: (self.PRIORITY.index(n) if n in self.PRIORITY else len(self.PRIORITY), n))
-        return [(n, f"{self.base}/{code}/{n}") for n in names]
+        pages = [(n, f"{self.base}/{code}/{n}") for n in names]
+        # 決算・財務の長い履歴は EDINET コード(/E02144/pl など)の側にあるので、銘柄トップからリンクされたものも取る
+        for href in links:
+            u = self.abs(href)
+            if u.netloc and u.netloc != self.host:
+                continue
+            m = re.match(r"^/(E\d{5})(?:/([A-Za-z0-9_\-]+))?/?$", u.path)
+            if m:
+                name = f"{m.group(1)}_{m.group(2) or 'top'}"
+                if name not in {n for n, _ in pages}:
+                    pages.append((name, f"{self.base}{u.path.rstrip('/')}"))
+        return pages
 
 
 class Kabutan(Source):
@@ -337,10 +377,11 @@ class Kabutan(Source):
         return f"{self.base}/stock/kabuka?code={code}&ashi=shin"
 
     def subpages(self, code, links, mode):
-        pages = [("margin", self.margin_url(code))]
+        # 毎週: 信用残と決算(通期・四半期の業績と配当)。決算は発表があった週に更新されるので毎週取り直す
+        pages = [("margin", self.margin_url(code)), ("finance", f"{self.base}/stock/finance?code={code}")]
         if mode != "full":
             return pages
-        pages += [("finance", f"{self.base}/stock/finance?code={code}"), ("holder", f"{self.base}/stock/holder?code={code}")]
+        pages += [("holder", f"{self.base}/stock/holder?code={code}")]
         known = {u for _, u in pages}
         # 銘柄トップにある、この銘柄の他のページ(/stock/xxx?code=コード)も取る
         for href in links:
@@ -458,6 +499,46 @@ def archive_stock(src: Source, f: Fetcher, code: str, opts, raw: dict[str, bytes
     return {"status": "ok" if ok else "failed", "pages": pages, "margin": margin, "edinetCodes": other_codes}
 
 
+def archive_market(src: Source, f: Fetcher, opts, raw: dict[str, bytes], year_hint: int, out: Path, key: bytes) -> dict | None:
+    """市場全体のページ(東証全体の信用残など)を取って data/{source}/market.json.enc に積み増す。"""
+    st, html, final = f.get(src.base + "/")
+    if st != 200:
+        print(f"[{src.label}] トップページを取得できませんでした({st})。市場全体のページは今回は取りません。", flush=True)
+        return None
+    top = parse_html(html)
+    cands = src.market_pages(top["anchors"], 15)
+    pages, margin_tables = [], []
+    for name, url, text in cands:
+        st, body, fin = f.get(url)
+        page = {"name": name, "label": text[:40], "url": fin, "status": st, "title": "", "tables": []}
+        if st == 200:
+            raw[f"_market/{name}.html"] = body.encode("utf-8")
+            parsed = parse_html(body)
+            page["title"], page["tables"] = parsed["title"], parsed["tables"]
+            seen, bodies = {url, fin}, {hash(body)}
+            more = src.follow_links(parsed["links"], fin, seen)[: opts.max_follow]
+            for k, murl in enumerate(more):
+                st2, body2, _ = f.get(murl)
+                if st2 != 200 or hash(body2) in bodies:
+                    continue
+                bodies.add(hash(body2))
+                raw[f"_market/{name}__{k + 1}.html"] = body2.encode("utf-8")
+                p2 = parse_html(body2)
+                page["tables"].extend(p2["tables"])
+                more.extend(u for u in src.follow_links(p2["links"], murl, seen) if len(more) < opts.max_follow)
+            if any("残" in "".join(t.get("headers") or []) for t in page["tables"]):
+                margin_tables.extend(page["tables"])
+        pages.append(page)
+    path = out / "market.json.enc"
+    old = decrypt_json(path.read_bytes(), key) if path.exists() else {}
+    margin = merge_margin(old.get("margin"), extract_margin(margin_tables, year_hint))
+    fresh = {p["name"] for p in pages}
+    doc = {"source": src.name, "fetchedAt": now_iso(), "pages": pages + [p for p in old.get("pages", []) if p.get("name") not in fresh], "margin": margin}
+    path.write_bytes(encrypt_json(doc, key))
+    print(f"[{src.label}] 市場全体: 候補 {len(cands)} ページ({', '.join(t for _, _, t in cands)[:200]})· 信用残 {len(margin)} 回", flush=True)
+    return {"fetchedAt": doc["fetchedAt"], "pages": {p["name"]: p["status"] for p in doc["pages"]}, "marginRows": len(margin), "marginFrom": margin[0]["date"] if margin else None, "marginTo": margin[-1]["date"] if margin else None}
+
+
 def merge_margin(old: list[dict], new: list[dict]) -> list[dict]:
     """日付で合わせる(同じ日付は新しい取得を優先)。週次の 1 ページ目だけでも履歴が積み上がる。"""
     by = {r["date"]: r for r in old or []}
@@ -471,17 +552,18 @@ def merge_margin(old: list[dict], new: list[dict]) -> list[dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", choices=sorted(SOURCES), default="kabutan")
-    ap.add_argument("--mode", choices=["weekly", "full"], default="weekly", help="株探: weekly=信用残の1ページ目とトップ / full=決算・大株主なども含めて全部・信用残の過去ページも")
+    ap.add_argument("--mode", choices=["weekly", "full"], default="weekly", help="株探: weekly=信用残の1ページ目・決算・トップ / full=大株主なども含めて全部・信用残の過去ページも")
     ap.add_argument("--codes", default="", help="カンマ区切りの銘柄コード(空=Future Sight の全銘柄)")
     ap.add_argument("--max-minutes", type=float, default=300)
     ap.add_argument("--delay", type=float, default=1.5, help="リクエスト間隔(秒)")
-    ap.add_argument("--max-subpages", type=int, default=40)
+    ap.add_argument("--max-subpages", type=int, default=60)
     ap.add_argument("--max-follow", type=int, default=40, help="1ページあたりの続き(ページ送り)の上限")
     ap.add_argument("--refetch-days", type=float, default=0, help="この日数より古い取得済み銘柄も取り直す(0=未取得だけ)")
     ap.add_argument("--out", default="", help="既定は data/{source}")
     ap.add_argument("--raw-out", default="", help="生 HTML の暗号化 tar.gz の出力先")
     ap.add_argument("--release-tag", default="")
     ap.add_argument("--fs-base", default=os.environ.get("FS_BASE", ""), help="Future Sight の配信元(既定は GitHub raw)")
+    ap.add_argument("--no-market", action="store_true", help="市場全体のページ(東証全体の信用残など)を取らない")
     opts = ap.parse_args()
     src: Source = SOURCES[opts.source]()
 
@@ -523,16 +605,22 @@ def main() -> int:
     todo.sort(key=lambda c: (c in index["stocks"], index["stocks"].get(c, {}).get("status") == "ok", index["stocks"].get(c, {}).get("fetchedAt", "")))
     total_ok = sum(1 for s in index["stocks"].values() if s.get("status") == "ok")
     print(f"[{src.label}] 対象 {len(codes)} 銘柄 / 今回 {len(todo)} 銘柄(mode={opts.mode}・間隔 {opts.delay}s・上限 {opts.max_minutes}分)", flush=True)
-    if not todo:
+    mk = index.get("market") or {}
+    market_due = not opts.no_market and not explicit and (not mk.get("fetchedAt") or (cutoff is not None and dt.datetime.fromisoformat(mk["fetchedAt"]) < cutoff))
+    if not todo and not market_due:
         print(f"取得するものはありません(取得済み {total_ok} 銘柄)。{src.label} には接続しません。", flush=True)
         return 0
 
     f = Fetcher(opts.delay, src.base)
-    if not f.allowed(src.top_url(todo[0])):
-        print(f"::warning::robots.txt が {src.label} の銘柄ページの取得を許可していません。取得できるページだけ進めます。")
-    deadline = time.time() + opts.max_minutes * 60
     raw: dict[str, bytes] = {}
     year_hint = dt.datetime.now(JST).year
+    if market_due:
+        res_m = archive_market(src, f, opts, raw, year_hint, out, key)
+        if res_m:
+            index["market"] = res_m
+    if todo and not f.allowed(src.top_url(todo[0])):
+        print(f"::warning::robots.txt が {src.label} の銘柄ページの取得を許可していません。取得できるページだけ進めます。")
+    deadline = time.time() + opts.max_minutes * 60
     done = failed = 0
     for i, code in enumerate(todo):
         if time.time() > deadline:

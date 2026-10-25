@@ -1,13 +1,13 @@
 name: Kabutan weekly
 
-# 株探から、stockAI(Future Sight)の対象銘柄の信用残(週次)と銘柄トップを取得し、暗号化して data/kabutan/ に積み増す。
+# 株探から、stockAI(Future Sight)の対象銘柄の信用残(週次)・決算(業績・配当)・銘柄トップを取得し、暗号化して data/kabutan/ に積み増す。
 # IRBANK の代わりの定期取得。信用残は毎週火曜の夕方に前週金曜申込分が出るので、水曜の朝に取る。
-# 初回(と、たまに)は mode=full で、信用残の過去ページ・決算・大株主などもまとめて取る。
+# 初回(と、たまに)は mode=full で、信用残の過去ページ・大株主などもまとめて取る。
 on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "weekly=信用残の1ページ目とトップ / full=過去ページ・決算なども全部"
+        description: "weekly=信用残の1ページ目・決算・トップ / full=過去ページ・大株主なども全部"
         required: false
         default: "weekly"
         type: choice
@@ -39,8 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 340
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
       - run: pip install "cryptography==43.0.3"

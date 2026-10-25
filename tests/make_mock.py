@@ -147,4 +147,24 @@ w("econ", {"categories": {"trade": "貿易・生産", "price": "物価"}, "serie
     {"id": "us_cpi", "name": "米 CPI", "cat": "price", "catLabel": "物価", "available": True, "last": 320.1, "date": "2026-09", "unit": "指数", "transform": "yoy", "tName": "前年比", "tLast": 0.028, "spark": [3, 2.9, 2.8], "levelSeries": lvl(300), "tSeries": [[f"{m}-01", random.uniform(.02, .04)] for m in months], "source": "fred", "key": "CPIAUCSL"},
     {"id": "jp_machine", "name": "工作機械受注", "cat": "trade", "catLabel": "貿易・生産", "available": False, "measures": "日本工作機械工業会の受注額。"},
 ], "regime": {"quadrant": "回復", "tilt": "景気敏感株", "growth": 0.4, "inflation": -0.2, "growthParts": [["a", "PMI", 0.5]], "inflationParts": [["b", "CPI", -0.2]]}, "releases": [{"name": "韓国 輸出", "period": "2026-09", "value": 7.2, "unit": "%", "prior": 5.1, "consensus": 6.0, "released_at": "2026-10-01"}]})
+def index_points(base, start=dt.date(2020, 1, 6)):
+    v, pts = base, []
+    for d in bdays(start, END):
+        o = v; v *= math.exp(random.gauss(0.0003, 0.012)); pts.append([d.isoformat(), round(o, 2), round(max(o, v) * 1.004, 2), round(min(o, v) * 0.996, 2), round(v, 2), random.randint(50_000_000, 200_000_000)])
+    return pts
+pages = []
+for pid, sym, name, kind, base, tz in [("N225", "^N225", "日経平均", "日本株指数", 23000, "JP"), ("TPX", "^TPX", "TOPIX", "日本株指数", 1700, "JP"), ("GSPC", "^GSPC", "S&P 500", "米国株指数", 3200, "US")]:
+    pts = index_points(base); last, prev = pts[-1][4], pts[-2][4]
+    pages.append({"id": pid, "symbol": sym, "name": name, "kind": kind, "tz": tz, "points": pts,
+                  "stats": {"last": last, "date": pts[-1][0], "prev": prev, "chg1d": last / prev - 1, "chg5d": 0.01, "chg20d": -0.02, "chg60d": 0.03, "chg250d": 0.2, "chgYtd": 0.15, "high52": last * 1.1, "low52": last * 0.8, "fromHigh52": -0.09, "fromPeak": -0.09, "vol20": 0.2, "vol60": 0.22, "vol250": 0.21, "atr14": last * 0.02, "rsi14": 45.0, "ma25dev": -0.01, "ma75dev": 0.02, "ma200dev": 0.05, "maxDd250": -0.15},
+                  "seasonality": [{"month": m, "avg": random.gauss(0.01, 0.02), "win": random.random(), "n": 6} for m in range(1, 13)],
+                  "corr60": {"TPX": 0.9, "GSPC": 0.3}, "corr250": {"TPX": 0.88, "GSPC": 0.35}, "ai": {"note": "使わない"}})
+w("index-pages", {"generatedAt": "2026-10-25T22:00:00+09:00", "pages": pages})
+wk = [d for d in bdays(dt.date(2025, 9, 5), END) if d.weekday() == 4]
+w("market", {"generatedAt": "2026-10-25T22:00:00+09:00",
+             "breadth": {"date": "2026-10-23", "n": 12, "advancers": 5, "decliners": 7, "above25": 0.4, "above75": 0.5, "above200": 0.6, "newHigh52": 1, "newLow52": 0, "medianChg20d": -0.01},
+             "sectors": [{"industry": ind, "n": 2, "chg1d": random.gauss(0, 0.01), "chg5d": random.gauss(0, 0.02), "chg20d": random.gauss(0, 0.05), "above25": random.random()} for ind in sorted({x[2] for x in STOCKS})],
+             "credit": [{"date": d.isoformat(), "week": d.isoformat(), "buy": 1.5e9 + i * 1e6, "sell": 3e8 - i * 1e6, "ratio": (1.5e9 + i * 1e6) / (3e8 - i * 1e6), "n": 12} for i, d in enumerate(wk)],
+             "creditDaily": [{"date": d.isoformat(), "buy": 1.6e9, "sell": 2.7e8, "ratio": 5.9, "n": 12} for d in bdays(dt.date(2026, 9, 25), END)],
+             "flows": {"weeks": [{"weekEnd": "2026-10-09", "availableFrom": "2026-10-16", "foreigners": -1234.5, "individuals": 987.0, "proprietary": 100.0, "total": -50.0, "totalValue": 900000.0}], "unit": "億円(差引き=買い−売り)", "source": "JPX 投資部門別"}})
 print(f"mock data: {len(STOCKS)} stocks → {out}")

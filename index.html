@@ -37,12 +37,6 @@
         <select id="tvType" aria-label="チャートの種類"><option value="candle">ローソク足</option><option value="ha">平均足</option><option value="bar">バー</option><option value="line">ライン</option><option value="area">エリア</option></select>
         <details class="tv-menu"><summary>インジケーター</summary><div class="tv-menu-body" id="tvIndMenu"></div></details>
         <details class="tv-menu"><summary>サブチャート</summary><div class="tv-menu-body" id="tvPaneMenu"></div></details>
-        <div class="tv-group ai" role="group" aria-label="AI予測">
-          <label><input type="checkbox" id="tvAi" checked> AI予測</label>
-          <select id="tvHorizon" aria-label="予測期間"></select>
-          <select id="tvModel" aria-label="予測モデル"><option value="ADOPTED">主役</option><option value="CURRENT">CURRENT</option><option value="GBM">GBM</option><option value="DNN">DNN</option><option value="CLAUDE">Claude</option></select>
-          <label title="保存済みの過去の予測を期限の日に表示"><input type="checkbox" id="tvPast"> 過去の予測</label>
-        </div>
         <div class="tv-group" role="group" aria-label="価格軸">
           <button type="button" data-scale="0" class="active" title="通常">通常</button><button type="button" data-scale="1" title="対数">対数</button><button type="button" data-scale="2" title="%表示">%</button>
         </div>
@@ -65,8 +59,8 @@
         </div>
         <aside class="tv-side">
           <div class="watch">
-            <div class="watch-head"><div class="seg" role="group"><button type="button" data-watch="all" class="active">全銘柄</button><button type="button" data-watch="fav">★お気に入り</button></div>
-              <select id="watchSort" aria-label="並び順"><option value="rank">売買代金順</option><option value="chg">前日比</option><option value="ai">AI 20日予測</option><option value="code">コード</option></select></div>
+            <div class="watch-head"><div class="seg" role="group"><button type="button" data-watch="all" class="active">全銘柄</button><button type="button" data-watch="idx">指数</button><button type="button" data-watch="fav">★</button></div>
+              <select id="watchSort" aria-label="並び順"><option value="rank">売買代金順</option><option value="chg">前日比</option><option value="code">コード</option></select></div>
             <input id="watchFilter" type="search" placeholder="絞り込み" aria-label="ウォッチリストを絞り込む">
             <div class="watch-cols"><span>銘柄</span><span>終値</span><span>前日比</span></div>
             <div id="watchList" class="watch-list"></div>
@@ -105,11 +99,11 @@
 
     <!-- 使い方 -->
     <section class="view page" data-view="about">
-      <div class="page-head"><h1>使い方・計算方法</h1></div>
+      <div class="page-head"><h1>使い方・計算方法</h1><p>株価・決算・配当・信用残などの<b>実データを自分で確認するためのページ</b>です。AI による株価予測は表示しません(推定と書いた信用評価損益率だけは、下の方法で残高から計算した値です)。</p></div>
       <div class="prose" id="aboutBody">
         <h2>データの出どころ</h2>
         <ul>
-          <li>株価・AI予測・株探/IRBANK の企業データ・信用残・貿易統計: <b>stockAI(Future Sight)</b> が公開している暗号化データを、このページがブラウザ内で復号して表示します。Future Sight と同じパスワードで開きます。</li>
+          <li>株価・株探/IRBANK の企業データ(決算・配当・財務・有報など)・信用残・貿易統計: <b>stockAI(Future Sight)</b> が公開している暗号化データを、このページがブラウザ内で復号して表示します。Future Sight と同じパスワードで開きます。</li>
           <li>保存データ: このリポジトリの GitHub Actions が取得したものです。株探(<code>kabutan-weekly.yml</code>、毎週水曜の朝)が定期取得の本線で、IRBANK(<code>irbank-archive.yml</code>)は使えなくなる前の一度きりの保存です。信用残は、stockAI に無い日付だけを株探保存 → IRBANK保存の順でつなぎます。</li>
           <li>チャート描画: TradingView の <a href="https://github.com/tradingview/lightweight-charts" target="_blank" rel="noopener">Lightweight Charts™</a>(Apache-2.0)。</li>
         </ul>
@@ -118,7 +112,8 @@
           <li>ドラッグ=横移動、ホイール/ピンチ=拡大縮小、価格軸のドラッグ=縦の伸縮、ダブルクリック=リセット。</li>
           <li>左の ― で水平線、╱ で2点のトレンドライン。描画は銘柄ごとにこの端末に保存されます。</li>
           <li>「サブチャート」で RSI・MACD・ストキャスティクスに加え、信用買残/売残・信用倍率・推定評価損益率・残高金額を下段に出せます。</li>
-          <li>AI予測: stockAI の予測(期間 VWAP の予測値)を最終日から期限の日まで点線で、68%・90% の帯を細線で描きます。期限の日付は土日だけを除いた概算です。</li>
+          <li>右のウォッチリストの「指数」で、日経平均・TOPIX・NASDAQ・S&amp;P500・VIX・米10年債・ドル円のチャートに切り替えられます(検索欄に「日経」などでも可)。日本株の指数では、サブチャートの信用残・信用倍率に市場の信用残を出します。株探・IRBANK から東証全体の値を保存できていればそれを、無ければ stockAI の対象銘柄(約400)の合計を使います。下段には指数の統計・投資部門別売買・騰落と業種を出します。</li>
+          <li>「決」の印は決算発表日です(インジケーターで切り替え)。発表日の値動きは下段の「決算発表」タブで一覧できます。</li>
         </ul>
         <h2>信用残の金額と推定評価損益率</h2>
         <p>信用評価損益率は「信用で買った(売った)建玉が、いまの株価でどれだけ含み損益を抱えているか」を表す値で、市場全体の値しか公表されていません。そこで、個別銘柄の申込日ごとの残高から次のように推定します。</p>
@@ -131,7 +126,7 @@
         <p>最初の観測日は「その日の終値で建てた」と置くので、履歴の最初の約半年は 0% 寄りに出ます(表では薄く表示)。株式分割は、分割日の前後の残高の跳びから信用残が未調整かを自動判定して、金額が連続するように揃えます。一般信用・貸借の区別、現引き・現渡しは残高からは分からないため、あくまで目安です。</p>
         <p>全銘柄合計の推定損益率は、各銘柄の金額とコストを足し合わせてから割ったもの(金額加重)です。</p>
         <h2>株探・IRBANK の保存</h2>
-        <p><b>株探(これから)</b>: GitHub の Actions で <b>Kabutan weekly</b> が毎週水曜の朝に動き、Future Sight の対象銘柄の信用残(週次)と銘柄トップを取って、信用残の履歴を積み増します。初回は手動で <code>mode=full</code> にすると、信用残の過去ページや決算・大株主のページもまとめて取ります。</p>
+        <p><b>株探(これから)</b>: GitHub の Actions で <b>Kabutan weekly</b> が毎週水曜の朝に動き、Future Sight の対象銘柄の信用残(週次)・決算(業績・配当)・銘柄トップを取って、信用残の履歴を積み増します。初回は手動で <code>mode=full</code> にすると、信用残の過去ページや大株主などのページもまとめて取ります。</p>
         <p><b>IRBANK(今回だけ)</b>: <b>IRBANK archive</b> を一度実行すると、信用残・空売り・貸借などの個別ページをすべて保存します。途中で止まっても毎日続きを取り、全銘柄そろった後は IRBANK に接続しません。</p>
         <p>どちらもリポジトリの Secrets に <code>FS_PAGES_PASSWORD</code>(このページと同じパスワード)が必要です。</p>
         <p class="muted">表示している数値は情報提供のためのもので、投資助言ではありません。</p>

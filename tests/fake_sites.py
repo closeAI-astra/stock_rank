@@ -59,6 +59,18 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, "User-agent: *\nDisallow: /login\n")
         if u.path.startswith("/stock"):
             return self.kabutan(u)
+        if u.path == "/":
+            return self.send(200, "<html><body><a href='/market/margin'>信用残の推移(市場全体)</a><a href='/market/flow'>投資部門別 売買動向</a>"
+                             "<a href='/7203/margin'>信用残</a><a href='/stock/kabuka?code=7203&ashi=shin'>信用残</a><a href='/ranking'>ランキング</a></body></html>")
+        if u.path == "/market/margin":
+            page = int(parse_qs(u.query).get("page", ["1"])[0]); end = dt.date(2026, 10, 16) - dt.timedelta(weeks=10 * (page - 1)); rows = []; d = end
+            for i in range(10):
+                rows.append(f"<tr><td>{d:%Y/%m/%d}</td><td>{900000 + i * 1000:,}</td><td>{4100000 + i * 5000:,}</td><td>{(4100000 + i * 5000) / (900000 + i * 1000):.2f}</td></tr>")
+                d -= dt.timedelta(weeks=1)
+            nav = "<a href='/market/margin?page=2'>2</a>" if page == 1 else ""
+            return self.send(200, f"<html><body><h2>信用取引残高(二市場・万株)</h2><table><thead><tr><th>申込日</th><th>売残</th><th>買残</th><th>倍率</th></tr></thead><tbody>{''.join(rows)}</tbody></table>{nav}</body></html>")
+        if u.path == "/market/flow":
+            return self.send(200, "<html><body><table><tr><th>週</th><th>海外投資家</th><th>個人</th></tr><tr><td>10/10</td><td>-1,234</td><td>567</td></tr></table></body></html>")
         if not parts or not parts[0].isdigit():
             return self.send(404, "not found")
         code = parts[0]
