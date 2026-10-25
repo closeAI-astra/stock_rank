@@ -413,13 +413,33 @@ class Fetcher:
         self.delay = delay
         self.last = 0.0
         self.count = 0
+        # robots.txt は RFC 9309 に沿って扱う: 200 なら中身に従う / 4xx(無い・拒否)は制限なし / 5xx・通信エラーは全部取らない。
+        # (Python 標準の read() は 401/403 を「全部禁止」にするので、その場合に原因が分からなくなる。自分で取って判断し、ログに残す)
         self.robots = urllib.robotparser.RobotFileParser()
+        self.robots_status, self.robots_note = None, ""
         try:
-            self.robots.set_url(base + "/robots.txt")
-            self.robots.read()
-        except Exception as e:  # robots が読めないときは控えめに進める
-            print(f"robots.txt を読めませんでした: {e}", flush=True)
-            self.robots = None
+            req = urllib.request.Request(base + "/robots.txt", headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                text = r.read().decode("utf-8", errors="replace")
+                self.robots_status = r.status
+            self.robots.parse(text.splitlines())
+            lines = [l for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
+            self.robots_note = f"robots.txt: HTTP 200 · {len(lines)} 行"
+            print(self.robots_note + "\n  " + "\n  ".join(lines[:40]) + ("\n  …" if len(lines) > 40 else ""), flush=True)
+        except urllib.error.HTTPError as e:
+            self.robots_status = e.code
+            if 400 <= e.code < 500:
+                self.robots.parse([])  # 制限なし
+                self.robots_note = f"robots.txt: HTTP {e.code}(無い/拒否 → RFC 9309 では制限なし。ページ自体が拒否されるかは各ページの応答で分かる)"
+            else:
+                self.robots.parse(["User-agent: *", "Disallow: /"])
+                self.robots_note = f"robots.txt: HTTP {e.code}(サーバーエラー → 安全のため全部取らない)"
+            print(self.robots_note, flush=True)
+        except Exception as e:
+            self.robots_status = 0
+            self.robots.parse(["User-agent: *", "Disallow: /"])
+            self.robots_note = f"robots.txt: 通信エラー {e}(安全のため全部取らない)"
+            print(self.robots_note, flush=True)
 
     def allowed(self, url: str) -> bool:
         return self.robots is None or self.robots.can_fetch(UA, url)
@@ -618,8 +638,12 @@ def main() -> int:
         res_m = archive_market(src, f, opts, raw, year_hint, out, key)
         if res_m:
             index["market"] = res_m
+    index["robots"] = {"status": f.robots_status, "note": f.robots_note, "checkedAt": now_iso()}
     if todo and not f.allowed(src.top_url(todo[0])):
-        print(f"::warning::robots.txt が {src.label} の銘柄ページの取得を許可していません。取得できるページだけ進めます。")
+        print(f"::warning::{src.label} の robots.txt が、このプログラム({UA})に銘柄ページ({src.top_url(todo[0])})の取得を許可していません。robots.txt に従い取得しません。{f.robots_note}")
+        index["updatedAt"] = now_iso()
+        index_path.write_bytes(encrypt_json(index, key))
+        return 0
     deadline = time.time() + opts.max_minutes * 60
     done = failed = 0
     for i, code in enumerate(todo):
@@ -646,7 +670,8 @@ def main() -> int:
             if prev.get("status") == "ok":
                 prev["lastError"] = f"{res['status']} {now_iso()}"  # 良い保存データは残す
             else:
-                index["stocks"][code] = {"status": res["status"], "name": names.get(code, ""), "fetchedAt": now_iso(), "pages": {}, "attempts": prev.get("attempts", 0) + 1}
+                # 「見つからない」(404)だけを諦める回数に数える。robots で止めた(999)・通信エラー・拒否は次回また試す
+                index["stocks"][code] = {"status": res["status"], "name": names.get(code, ""), "fetchedAt": now_iso(), "pages": {}, "attempts": prev.get("attempts", 0) + (1 if res["status"] == "http_404" else 0)}
         m = res.get("margin") or []
         print(f"[{i + 1}/{len(todo)}] {code} {names.get(code, '')} {res['status']} pages={len(res['pages'])} 信用残(今回)={len(m)}回 {time.time() - t0:.0f}s", flush=True)
         if (i + 1) % 10 == 0:  # 途中経過も書いておく(強制終了に備える)
