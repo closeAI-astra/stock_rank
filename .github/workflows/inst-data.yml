@@ -1,0 +1,41 @@
+name: Institutional data
+
+# 公的な需給データ(JPX の空売り残高・空売り比率・裁定取引残高・信用取引残高、日証金の貸借残高・品貸料、
+# EDINET の大量保有報告書・自己株券買付状況報告書)を取得して、暗号化して data/inst/ に保存する。
+# mode=probe は置き場所と形式を調べて表示するだけ(保存しない)。
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "probe=置き場所と形式を調べる / update=取得して保存"
+        required: false
+        default: "probe"
+        type: choice
+        options: [probe, update]
+      only:
+        description: "取得元を絞る(jpx,jsf,edinet。空=全部)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: inst-data
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install "cryptography==43.0.3" "pandas==2.2.3" "xlrd==2.0.1" "openpyxl==3.1.5"
+      - name: Probe
+        if: ${{ (inputs.mode || 'probe') == 'probe' }}
+        env:
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+        run: python scripts/inst_probe.py --sample --only "${{ inputs.only }}"
