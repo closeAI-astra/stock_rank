@@ -313,15 +313,16 @@
     document.title = `${code} ${row?.name || ""} · Stock Rank`;
     $$("#watchList .watch-row").forEach((b) => b.classList.toggle("active", b.dataset.code === code));
     $("#tvLegend").innerHTML = '<span class="muted">読み込み中…</span>';
-    const [doc, detail, kabutan, irbank] = await Promise.all([
+    const [doc, detail, kabutan, irbank, inst] = await Promise.all([
       SRData.chartDoc(code).catch((e) => { console.warn(e); return null; }),
       SRData.detailDoc(code).catch((e) => { console.warn(e); return null; }),
       SRData.own(`kabutan/stocks/${code}`).catch(() => null),
       SRData.own(`irbank/stocks/${code}`).catch(() => null),
+      SRData.own(`inst/stocks/${code}`).catch(() => null),
     ]);
     if (S.code !== code) return; // 読み込み中に別銘柄へ移った
     const dec = SRData.decodeChart(doc);
-    S.cur = { code, row, ...dec, detail, archives: { kabutan, irbank } };
+    S.cur = { code, row, ...dec, detail, archives: { kabutan, irbank }, inst };
     S.compare = S.compare.filter((c) => c.code !== code);
     S.drawings = loadDrawings(code); undoStack = []; redoStack = [];
     S.pending = null;
@@ -336,15 +337,16 @@
   async function marketCredit() {
     if (!S.market) S.market = await SRData.fs("market").catch(() => ({}));
     if (!S.marketSaved) {
-      const [kabutan, irbank] = await Promise.all(ARCHIVE_SOURCES.map(([k]) => SRData.own(`${k}/market`).catch(() => null)));
-      S.marketSaved = { kabutan, irbank };
+      const [kabutan, irbank, inst] = await Promise.all([...ARCHIVE_SOURCES.map(([k]) => SRData.own(`${k}/market`).catch(() => null)), SRData.own("inst/market").catch(() => null)]);
+      S.marketSaved = { kabutan, irbank }; S.instMarket = inst;
     }
-    const whole = SRCredit.mergeSources(ARCHIVE_SOURCES.map(([k, label]) => [S.marketSaved[k]?.margin, `${label}(東証全体)`]));
+    // 東証全体: JPX の公表(Institutional data で取得)> 株探保存 > IRBANK保存
+    const whole = SRCredit.mergeSources([[S.instMarket?.margin, "JPX(東証全体)"], ...ARCHIVE_SOURCES.map(([k, label]) => [S.marketSaved[k]?.margin, `${label}(東証全体)`])]);
     // 合計に入った銘柄数が少ない日(取得漏れ)は、合計が不連続に落ちるので除く
     const maxN = Math.max(0, ...[...(S.market.credit || []), ...(S.market.creditDaily || [])].map((r) => num(r.n) || 0));
     const full = (rows) => dropErrata(rows).filter((r) => !maxN || (num(r.n) || 0) >= maxN * 0.9);
     const agg = SRCredit.mergeSources([[full(S.market.creditDaily), "stockAI 対象銘柄合計(日次)"], [full(S.market.credit), "stockAI 対象銘柄合計(週次)"]]);
-    return whole.length >= 4 ? { rows: whole, label: "東証全体(株探・IRBANK 保存)", agg } : { rows: agg, label: `stockAI 対象銘柄の合計(${S.market.credit?.at(-1)?.n || "約400"}銘柄)`, agg };
+    return whole.length >= 4 ? { rows: whole, label: S.instMarket?.margin?.length ? "東証全体(JPX)" : "東証全体(株探・IRBANK 保存)", agg } : { rows: agg, label: `stockAI 対象銘柄の合計(${S.market.credit?.at(-1)?.n || "約400"}銘柄)`, agg };
   }
   // 指数の信用残は株数だけを扱う(指数の値 × 株数 は金額にならないので、金額・評価損益率は出さない)
   function creditRowsOnly(rows) {
@@ -949,7 +951,7 @@
   // =====================================================================
   // 下段のタブ(信用残・株探/IRBANK の企業データ)
   // =====================================================================
-  const BOTTOM_TABS = [["credit", "信用残・金額・評価損益"], ["risk", "感応度・リスク"], ["progress", "決算進捗"], ["perf", "業績"], ["quarter", "四半期"], ["fin", "財務"], ["ind", "指標"], ["val", "株価指標"], ["div", "配当"], ["seg", "セグメント"], ["peers", "競合"], ["earn", "決算発表"], ["quality", "財務の質"], ["edinet", "有報"], ["people", "人的資本"], ["profile", "会社情報"], ["saved", "株探・IRBANK 保存"]];
+  const BOTTOM_TABS = [["credit", "信用残・金額・評価損益"], ["inst", "空売り・貸借・大量保有"], ["risk", "感応度・リスク"], ["progress", "決算進捗"], ["perf", "業績"], ["quarter", "四半期"], ["fin", "財務"], ["ind", "指標"], ["val", "株価指標"], ["div", "配当"], ["seg", "セグメント"], ["peers", "競合"], ["earn", "決算発表"], ["quality", "財務の質"], ["edinet", "有報"], ["people", "人的資本"], ["profile", "会社情報"], ["saved", "株探・IRBANK 保存"]];
   function renderBottom() {
     const tabs = $("#bottomTabs"); const cur = S.cur;
     const set = cur?.isIndex ? INDEX_TABS : BOTTOM_TABS; const kind = cur?.isIndex ? "index" : "stock";
@@ -971,7 +973,7 @@
       mountMini();
       return;
     }
-    const fn = { credit: tabCredit, risk: tabRisk, progress: tabProgress, quality: tabQuality, perf: tabPerf, quarter: tabQuarter, fin: tabFin, ind: tabInd, val: tabVal, div: tabDiv, seg: tabSeg, peers: tabPeers, earn: tabEarn, edinet: tabEdinet, people: tabPeople, profile: tabProfile, saved: tabSaved }[S.set.bottomTab] || tabCredit;
+    const fn = { credit: tabCredit, inst: tabInst, risk: tabRisk, progress: tabProgress, quality: tabQuality, perf: tabPerf, quarter: tabQuarter, fin: tabFin, ind: tabInd, val: tabVal, div: tabDiv, seg: tabSeg, peers: tabPeers, earn: tabEarn, edinet: tabEdinet, people: tabPeople, profile: tabProfile, saved: tabSaved }[S.set.bottomTab] || tabCredit;
     const d = cur.detail || {};
     try { body.innerHTML = fn(d, cur); } catch (e) { console.error(e); body.innerHTML = `<p class="muted pad">表示できませんでした: ${esc(e.message)}</p>`; }
     $$("[data-method]", body).forEach((b) => b.addEventListener("click", () => { S.set.creditMethod = b.dataset.method; saveSettings(); computeEst(cur); renderChart(true); renderSymCard(); renderBottom(); }));
@@ -1234,6 +1236,18 @@
       <p class="foot">「TOPIX 比 + 配当」は、権利落ち日の下げ(市場の動きを除く)が配当の分より小さければプラス、配当以上に売られればマイナス。配当は IRBANK の中間・期末の1株配当(分割前の実際の額)で、日足のある期間(${esc(cur.daily[0]?.d || "")}〜)だけ計算しています。</p>`;
   }
 
+  // JPX の市場全体の需給(空売り比率・裁定取引残高)。data/inst/market.json.enc
+  //   shortRatio: [{date, ratio, restricted, unrestricted, total}] / arbitrage: [{date, buy, sell, net}] / margin: [{date, buy, sell, ratio}]
+  function instMarketSection() {
+    const m = S.instMarket; if (!m) return `<div class="row-head"><h3>空売り比率・裁定取引残高(JPX)</h3></div><div class="empty">まだ取得していません。<br><small>GitHub Actions の「Institutional data」(mode=update)で JPX から取得します。</small></div>`;
+    const out = [];
+    const sr = (m.shortRatio || []).filter((r) => num(r.ratio) !== null);
+    if (sr.length) { const l = sr.at(-1); out.push(`<div class="row-head"><h3>空売り比率(東証・売買代金ベース)</h3><small>${esc(l.date)} ${(l.ratio * 100).toFixed(1)}% · 40% 超が続くと売られすぎ(買い戻し待ち)の目安 · 価格規制あり ${pct(l.restrictedShare, 1).replace("+", "")} / なし</small></div>${mini("miniSR", 170, (c) => { const s = c.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, title: "空売り比率", priceFormat: { type: "custom", formatter: (v) => `${v.toFixed(1)}%`, minMove: 0.1 } }); s.setData(sr.map((r) => ({ time: r.date, value: r.ratio * 100 }))); s.createPriceLine({ price: 40, color: alpha(css("--down"), 0.6), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "40%" }); })}`); }
+    const ar = (m.arbitrage || []).filter((r) => num(r.buy) !== null || num(r.sell) !== null);
+    if (ar.length) { const l = ar.at(-1); out.push(`<div class="row-head"><h3>裁定取引残高(現物の買い・売り)</h3><small>${esc(l.date)} 買い ${fmt(l.buy)} / 売り ${fmt(l.sell)}(${esc(m.arbitrageUnit || "")})· 買い残が積み上がるほど、解消売り(先物主導の下げ)の余地が大きい</small></div>${mini("miniArb", 170, (c) => { const a = c.addSeries(LW.LineSeries, { color: css("--credit-buy"), lineWidth: 2, title: "裁定買い残", priceFormat: { type: "volume" } }); a.setData(ar.filter((r) => num(r.buy) !== null).map((r) => ({ time: r.date, value: r.buy }))); const b = c.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, title: "裁定売り残", priceFormat: { type: "volume" } }); b.setData(ar.filter((r) => num(r.sell) !== null).map((r) => ({ time: r.date, value: r.sell }))); })}`); }
+    return out.join("") + `<p class="foot">JPX 公表。取得: ${esc(String(m.updatedAt || "").slice(0, 16).replace("T", " "))}</p>`;
+  }
+
   // ---------- 市場の需給(指数) ----------
   function tabSupply(cur) {
     const n225 = idxRows("N225"), tpx = idxRows("TPX"); const tMap = new Map(tpx.map((r) => [r.d, r.c]));
@@ -1242,6 +1256,7 @@
     const parts = [];
     parts.push(`<div class="row-head"><h3>NT 倍率(日経平均 ÷ TOPIX)</h3><small>${ntLast ? `${esc(ntLast.time)} ${ntLast.value.toFixed(2)}倍 · 1年平均 ${ntAvg.toFixed(2)}倍` : ""} · 上がるほど値がさ株(半導体・ファストリなど)主導、下がるほど銀行・内需など TOPIX の大型株主導</small></div>${nt.length ? mini("miniNT", 170, (c) => { const s = c.addSeries(LW.LineSeries, { color: "#ff9800", lineWidth: 2, title: "NT倍率", priceFormat: { type: "price", precision: 2, minMove: 0.01 } }); s.setData(nt); }) : ""}`);
     if (!S.rankData) {
+      parts.push(instMarketSection());
       parts.unshift(`<div class="empty">騰落レシオ・新高値/新安値・移動平均線より上の割合・信用買残の時価総額比は、対象銘柄(約400)の日足から計算します。<br><button type="button" class="btn" data-load-universe>全銘柄の株価を読み込んで計算する</button><br><small>ランキング・信用ページと同じ読み込み(十数MB)です。</small></div>`);
       return parts.join("");
     }
@@ -1275,8 +1290,51 @@
     parts.unshift(`${cards}<div class="row-head"><h3>騰落レシオ(25日)</h3><small>25日間の値上がり銘柄数の合計 ÷ 値下がり銘柄数の合計</small></div>${ad}
       <div class="row-head"><h3>移動平均線より上にある銘柄の割合</h3></div>${ma}<div class="row-head"><h3>52週 新高値・新安値の銘柄数</h3><small>下向きが新安値</small></div>${hl}
       ${bm ? `<div class="row-head"><h3>信用買残の時価総額比(対象銘柄の合計・週次)</h3><small>買残金額 ÷ 時価総額。高いほど将来の売り物(買い方の返済売り)が積み上がっている</small></div>${bm}` : ""}`);
+    parts.push(instMarketSection());
     parts.push(`<p class="foot">騰落レシオなどは stockAI の対象銘柄(東証の売買代金上位 約400)の日足から計算しており、東証全体の公表値とは一致しません。</p>`);
     return parts.join("");
+  }
+
+  // ---------- 機関の需給(JPX の空売り残高報告・日証金の貸借・EDINET の大量保有/自己株買付) ----------
+  // data/inst/stocks/{code}.json.enc(scripts/inst_data.py が作る)
+  //   shorts:  [{date, holder, ratio, shares, prevDate, prevRatio}]   … 空売り残高の報告(発行済の 0.5% 以上)
+  //   lending: [{date, loan, lend, net, ratio, fee, feeDays}]         … 日証金の融資残(買い)・貸株残(売り)・品貸料(逆日歩)
+  //   large:   [{date, filer, ratio, prevRatio, purpose, docID, desc}] … 大量保有報告書(5% ルール)
+  //   buyback: [{date, docID, desc, filer}]                             … 自己株券買付状況報告書
+  const EDINET_DOC = (id) => `https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?${encodeURIComponent(id)}`;
+  // 報告日ごとに「その時点で残っている各報告者の最新の割合」を足した合計
+  function shortTotals(shorts) {
+    const list = (shorts || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1)); const cur = new Map(); const out = new Map();
+    list.forEach((r) => { cur.set(r.holder, r); out.set(r.date, [...cur.values()].reduce((p, x) => p + (num(x.ratio) || 0), 0)); });
+    return [...out.entries()].map(([time, value]) => ({ time, value }));
+  }
+  function tabInst(d, cur) {
+    const x = cur.inst;
+    if (!x) return `<div class="empty">この銘柄の機関の需給データはまだありません。<br><small>GitHub Actions の「Institutional data」(mode=update)を実行すると、JPX の空売り残高報告・日証金の貸借残高と品貸料(逆日歩)・EDINET の大量保有報告書と自己株券買付状況報告書がここに入ります。</small></div>`;
+    const parts = [];
+    const shorts = x.shorts || [];
+    if (shorts.length) {
+      const latest = new Map(); shorts.slice().sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((r) => latest.set(r.holder, r));
+      const active = [...latest.values()].filter((r) => num(r.ratio) > 0).sort((a, b) => b.ratio - a.ratio);
+      const tot = shortTotals(shorts); const last = tot.at(-1);
+      parts.push(`<div class="cards"><article><span>報告された空売り残高の合計</span><strong>${last ? `${last.value.toFixed(2)}<small>%</small>` : "—"}</strong><em>${last ? `${esc(last.time)} 時点 · 発行済株式に対する割合` : ""} · ${active.length}社</em></article>${active.slice(0, 3).map((r) => `<article><span>${esc(r.holder)}</span><strong>${num(r.ratio).toFixed(2)}<small>%</small></strong><em>${esc(r.date)} · ${fmt(r.shares)}株${num(r.prevRatio) !== null ? ` · 前回 ${num(r.prevRatio).toFixed(2)}%` : ""}</em></article>`).join("")}</div>
+        <div class="row-head"><h3>空売り残高の報告(発行済の 0.5% 以上)</h3><small>JPX 公表。0.5% を下回ると報告されなくなる(下回った回は 0% 前後で報告)</small></div>
+        ${tot.length > 1 ? mini("miniShort", 170, (c) => { const s = c.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, lineType: LW.LineType.WithSteps, title: "報告の合計", priceFormat: { type: "custom", formatter: (v) => `${v.toFixed(2)}%`, minMove: 0.01 } }); s.setData(tot); }) : ""}
+        <div class="table-wrap tall"><table class="grid"><thead><tr><th>計算日</th><th class="left">報告者</th><th>割合</th><th>株数</th><th>前回</th><th>増減</th></tr></thead><tbody>${shorts.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 400).map((r) => { const ch = num(r.ratio) !== null && num(r.prevRatio) !== null ? r.ratio - r.prevRatio : null; return `<tr><th>${esc(r.date)}</th><td class="left">${esc(r.holder)}</td><td>${num(r.ratio) === null ? "—" : `${num(r.ratio).toFixed(2)}%`}</td><td>${fmt(r.shares)}</td><td>${num(r.prevRatio) === null ? "—" : `${num(r.prevRatio).toFixed(2)}%<small>${esc(r.prevDate || "")}</small>`}</td><td class="${cls(ch === null ? null : -ch)}">${ch === null ? "—" : `${ch >= 0 ? "+" : ""}${ch.toFixed(2)}pt`}</td></tr>`; }).join("")}</tbody></table></div>`);
+    }
+    const lend = x.lending || [];
+    if (lend.length) {
+      const l = lend.at(-1);
+      parts.push(`<div class="row-head"><h3>貸借取引(日証金)</h3><small>融資 = 制度信用の買い方へ資金、貸株 = 売り方へ株。貸株が融資を上回ると株不足になり品貸料(逆日歩)が付く</small></div>
+        <div class="cards"><article><span>貸借倍率(融資 ÷ 貸株)</span><strong>${fmt(l.ratio, 2)}<small>倍</small></strong><em>${esc(l.date)}</em></article><article><span>融資残 / 貸株残</span><strong>${fmt(l.loan)} / ${fmt(l.lend)}</strong><em>差引 ${diffCell(l.net)}株</em></article><article><span>品貸料(逆日歩)</span><strong class="${num(l.fee) > 0 ? "down" : ""}">${num(l.fee) === null ? "—" : `${fmtPrice(l.fee)}<small>円/株</small>`}</strong><em>${num(l.feeDays) ? `${l.feeDays}日分` : ""} · 直近20回で ${lend.slice(-20).filter((r) => num(r.fee) > 0).length}回</em></article></div>
+        ${mini("miniLend", 170, (c) => { const a = c.addSeries(LW.LineSeries, { color: "#ffb300", lineWidth: 2, title: "貸借倍率", priceFormat: { type: "price", precision: 2, minMove: 0.01 } }); a.setData(lend.filter((r) => num(r.ratio) !== null).map((r) => ({ time: r.date, value: r.ratio }))); const f = c.addSeries(LW.HistogramSeries, { color: alpha(DOWN(), 0.7), priceScaleId: "left", title: "品貸料", priceFormat: { type: "price", precision: 2, minMove: 0.01 } }); f.setData(lend.filter((r) => num(r.fee) > 0).map((r) => ({ time: r.date, value: r.fee }))); c.applyOptions({ leftPriceScale: { visible: true } }); })}
+        <div class="table-wrap tall"><table class="grid"><thead><tr><th>日付</th><th>融資残(株)</th><th>貸株残(株)</th><th>差引</th><th>貸借倍率</th><th>品貸料(円)</th><th>日数</th></tr></thead><tbody>${lend.slice().reverse().slice(0, 300).map((r) => `<tr><th>${esc(r.date)}</th><td>${fmt(r.loan)}</td><td>${fmt(r.lend)}</td><td>${diffCell(r.net)}</td><td>${fmt(r.ratio, 2)}</td><td class="${num(r.fee) > 0 ? "down" : ""}">${num(r.fee) === null ? "—" : fmtPrice(r.fee)}</td><td>${r.feeDays ?? "—"}</td></tr>`).join("")}</tbody></table></div>`);
+    }
+    const large = x.large || [];
+    if (large.length) parts.push(`<div class="row-head"><h3>大量保有報告書(5% ルール)</h3><small>EDINET。保有割合が 5% を超えたとき・1% 以上動いたときに出る</small></div><div class="table-wrap"><table class="grid"><thead><tr><th>提出日</th><th class="left">提出者</th><th>保有割合</th><th>前回</th><th>増減</th><th class="left">書類</th></tr></thead><tbody>${large.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => { const ch = num(r.ratio) !== null && num(r.prevRatio) !== null ? r.ratio - r.prevRatio : null; return `<tr><th>${esc(r.date)}</th><td class="left">${esc(r.filer)}${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${num(r.ratio) === null ? "—" : `${num(r.ratio).toFixed(2)}%`}</td><td>${num(r.prevRatio) === null ? "—" : `${num(r.prevRatio).toFixed(2)}%`}</td><td class="${cls(ch)}">${ch === null ? "—" : `${ch >= 0 ? "+" : ""}${ch.toFixed(2)}pt`}</td><td class="left">${r.docID ? `<a href="${EDINET_DOC(r.docID)}" target="_blank" rel="noopener">${esc(r.desc || r.docID)}</a>` : esc(r.desc || "")}</td></tr>`; }).join("")}</tbody></table></div>`);
+    const bb = x.buyback || [];
+    if (bb.length) parts.push(`<div class="row-head"><h3>自己株券買付状況報告書</h3><small>EDINET。自社株買いの枠がある間、毎月の買付の実績を報告する</small></div><div class="table-wrap"><table class="grid left"><thead><tr><th>提出日</th><th>書類</th></tr></thead><tbody>${bb.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => `<tr><th>${esc(r.date)}</th><td>${r.docID ? `<a href="${EDINET_DOC(r.docID)}" target="_blank" rel="noopener">${esc(r.desc || r.docID)}</a>` : esc(r.desc || "")}</td></tr>`).join("")}</tbody></table></div>`);
+    return (parts.join("") || empty("この銘柄の機関の需給データはありません(空売り残高の報告・大量保有の提出などが無い)。")) + `<p class="foot">取得: ${esc(String(x.updatedAt || "").slice(0, 16).replace("T", " "))}。出典: JPX(空売り残高情報)・日本証券金融(貸借取引残高・品貸料)・EDINET。</p>`;
   }
 
   // 株探の通期(百万円)に、株探に無い古い期を IRBANK(円)で補う(Future Sight と同じ)

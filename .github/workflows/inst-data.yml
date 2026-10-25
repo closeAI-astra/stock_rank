@@ -3,13 +3,18 @@ name: Institutional data
 # 公的な需給データ(JPX の空売り残高・空売り比率・裁定取引残高・信用取引残高、日証金の貸借残高・品貸料、
 # EDINET の大量保有報告書・自己株券買付状況報告書)を取得して、暗号化して data/inst/ に保存する。
 # mode=probe は置き場所と形式を調べて表示するだけ(保存しない)。
+# JPX の一覧は直近約3週間分、日証金の CSV はその日の分しか置かれないので、平日に毎日取って積み増す。
+# (JPX・日証金は GitHub Actions から取得できることを 2026-10-26 に確認)
 on:
+  schedule:
+    - cron: "43 23 * * 0-4"   # 08:43 JST(火〜土)… 日証金の確報・前日分の JPX
+    - cron: "13 10 * * 1-5"   # 19:13 JST(月〜金)… 当日の JPX 空売り比率・日証金の速報
   workflow_dispatch:
     inputs:
       mode:
         description: "probe=置き場所と形式を調べる / update=取得して保存"
         required: false
-        default: "probe"
+        default: "update"
         type: choice
         options: [probe, update]
       only:
@@ -20,6 +25,10 @@ on:
         description: "probe: このファイルだけ中身を表示(カンマ区切り)"
         required: false
         default: ""
+      edinet_days:
+        description: "EDINET の初回にさかのぼる日数"
+        required: false
+        default: "365"
 
 permissions:
   contents: write
@@ -39,7 +48,27 @@ jobs:
           python-version: "3.12"
       - run: pip install "cryptography==43.0.3" "pandas==2.2.3" "xlrd==2.0.1" "openpyxl==3.1.5" "pypdf==5.1.0"
       - name: Probe
-        if: ${{ (inputs.mode || 'probe') == 'probe' }}
+        if: ${{ inputs.mode == 'probe' }}
         env:
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
         run: python scripts/inst_probe.py --sample --only "${{ inputs.only }}" --urls "${{ inputs.urls }}"
+      - name: Fetch and save
+        if: ${{ (inputs.mode || 'update') == 'update' }}
+        env:
+          FS_PAGES_PASSWORD: ${{ secrets.FS_PAGES_PASSWORD }}
+          EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
+        run: python scripts/inst_data.py --only "${{ inputs.only }}" --edinet-days "${{ inputs.edinet_days || '365' }}" --max-minutes 90
+      - name: Commit
+        if: ${{ !cancelled() && (inputs.mode || 'update') == 'update' }}
+        run: |
+          git config user.name "stock-rank-bot"
+          git config user.email "stock-rank-bot@users.noreply.github.com"
+          if [ ! -d data/inst ]; then echo "保存データなし"; exit 0; fi
+          git add data/inst
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -m "Institutional data $(TZ=Asia/Tokyo date '+%Y-%m-%d %H:%M')"
+          for i in 1 2 3 4; do
+            git pull --rebase origin "${{ github.ref_name }}" && git push origin "HEAD:${{ github.ref_name }}" && exit 0
+            sleep $((i * 5))
+          done
+          exit 1
