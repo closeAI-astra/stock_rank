@@ -1,32 +1,59 @@
 <!doctype html>
-<html lang="ja">
+<html lang="ja" data-fs-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
   <title>Stock Rank</title>
-  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
   <link rel="stylesheet" href="assets/css/app.css">
-  <script>try { const t = localStorage.getItem("stockrank-theme"); if (t) document.documentElement.dataset.theme = t; } catch { /* */ }</script>
+  <!-- テーマは Future Sight と同じ保存先(同じ github.io なら両方に効く)。読み込み前に当てて、ちらつきを防ぐ -->
+  <script>try { const t = localStorage.getItem("future-sight-theme"); if (["light", "dark", "prototype", "earth"].includes(t)) document.documentElement.dataset.fsTheme = t; } catch { /* */ }</script>
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="#chart"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l5-6 4 3 6-8 3 2" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg><b>Stock Rank</b></a>
-    <nav class="mainnav" aria-label="ページ">
-      <a href="#chart" data-nav="chart">チャート</a>
-      <a href="#rank" data-nav="rank">ランキング・信用</a>
-      <a href="#macro" data-nav="macro">マクロ・貿易</a>
-      <a href="#archive" data-nav="archive">保存データ</a>
-      <a href="#about" data-nav="about">使い方</a>
-    </nav>
-    <div class="topbar-right">
-      <div class="symsearch"><input id="symSearch" type="search" placeholder="銘柄コード・名前" autocomplete="off" aria-label="銘柄を検索"><div id="symResults" class="symresults" hidden></div></div>
-      <span id="asOf" class="asof"></span>
-      <button type="button" id="themeBtn" class="icon-btn" title="明るさを切り替え" aria-label="テーマ切り替え">◐</button>
-    </div>
-  </header>
+  <div class="ambient ambient-a" aria-hidden="true"></div>
+  <div class="ambient ambient-b" aria-hidden="true"></div>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="メインナビゲーション">
+      <a class="brand" href="#chart" aria-label="Stock Rank チャートへ">
+        <span class="brand-mark" aria-hidden="true"><img src="assets/future-sight-logo.png" alt=""></span>
+        <span class="brand-copy"><strong>Stock Rank</strong><small>Market Data × Future Sight</small></span>
+        <span class="prototype-badge">DATA</span>
+      </a>
+      <nav class="nav-list">
+        <a class="nav-item" href="#chart" data-nav="chart"><span class="nav-icon">⟋</span><span>チャート</span></a>
+        <a class="nav-item" href="#rank" data-nav="rank"><span class="nav-icon">☷</span><span>ランキング・信用</span></a>
+        <a class="nav-item" href="#macro" data-nav="macro"><span class="nav-icon">◇</span><span>マクロ・貿易</span></a>
+        <a class="nav-item" href="#archive" data-nav="archive"><span class="nav-icon">▦</span><span>保存データ</span></a>
+        <a class="nav-item" href="#about" data-nav="about"><span class="nav-icon">?</span><span>使い方</span></a>
+      </nav>
+      <div class="sidebar-foot">
+        <p>PRICE · FILINGS · CREDIT</p>
+        <span>株価・決算・配当・信用残を、<br>予測ではなく実データで確認。</span>
+      </div>
+    </aside>
 
-  <main id="app">
+    <div class="main-area">
+      <header class="topbar">
+        <button class="mobile-menu" id="mobileMenu" type="button" aria-label="メニューを開く">☰</button>
+        <label class="global-search">
+          <span aria-hidden="true">⌕</span>
+          <input id="symSearch" type="search" autocomplete="off" placeholder="銘柄・指数に移動(コード / 社名 / 日経平均…)" aria-label="銘柄・指数を検索して移動">
+          <div id="symResults" class="symresults" hidden></div>
+          <kbd>/</kbd>
+        </label>
+        <div class="top-actions">
+          <div class="theme-switch" role="group" aria-label="表示テーマ">
+            <button type="button" data-theme-value="light">Light</button>
+            <button type="button" data-theme-value="dark">Dark</button>
+            <button type="button" data-theme-value="prototype">Prototype</button>
+            <button type="button" data-theme-value="earth">Earth</button>
+          </div>
+          <span class="sync-status"><i></i><span id="asOf">読込中</span></span>
+        </div>
+      </header>
+
+  <main id="app" class="page-stack">
     <!-- チャート(TradingView 型) -->
     <section class="view" data-view="chart">
       <div class="tv-toolbar">
@@ -76,7 +103,7 @@
 
     <!-- ランキング・信用 -->
     <section class="view page" data-view="rank">
-      <div class="page-head"><h1>ランキング・信用残</h1><p>stockAI の対象銘柄の信用倍率・買残/売残とその金額・推定の信用評価損益率を一覧にします。列の見出しを押すと並び替え。</p></div>
+      <div class="page-head"><p class="eyebrow">CREDIT RANKING</p><h1>ランキング・信用残</h1><p>stockAI の対象銘柄の信用倍率・買残/売残とその金額・推定の信用評価損益率を一覧にします。列の見出しを押すと並び替え。</p></div>
       <div id="rankProgress" class="progress" hidden><i></i><span></span></div>
       <div id="rankAgg"></div>
       <div class="filters"><input id="rankFilter" type="search" placeholder="コード・名前で絞り込み"><select id="rankIndustry"><option value="">すべての業種</option></select><select id="rankMethod" title="評価損益率の推定方法"><option value="fifo6m">推定法: 先入れ先出し+6か月期日</option><option value="avg">推定法: 移動平均</option></select><label><input type="checkbox" id="rankNoWarm" checked> 履歴が半年未満の銘柄の損益率を除く</label><span id="rankCount" class="muted"></span></div>
@@ -86,20 +113,20 @@
 
     <!-- マクロ・貿易 -->
     <section class="view page" data-view="macro">
-      <div class="page-head"><h1>マクロ・貿易統計</h1><p id="macroSub">stockAI(Future Sight)が集めた貿易統計・経済指標・市況。</p></div>
+      <div class="page-head"><p class="eyebrow">MACRO · TRADE</p><h1>マクロ・貿易統計</h1><p id="macroSub">stockAI(Future Sight)が集めた貿易統計・経済指標・市況。</p></div>
       <div class="tabs" id="macroTabs" role="tablist"></div>
       <div id="macroBody"></div>
     </section>
 
     <!-- IRBANK 保存 -->
     <section class="view page" data-view="archive">
-      <div class="page-head"><h1>保存データ(株探・IRBANK)</h1><p>GitHub Actions で取得し、同じパスワードで暗号化してこのリポジトリに保存したもの。<b>株探</b>は毎週の定期取得(信用残の週次を積み増す)、<b>IRBANK</b> は使えなくなる前の一度きりの保存です。</p></div>
+      <div class="page-head"><p class="eyebrow">ARCHIVE</p><h1>保存データ(株探・IRBANK)</h1><p>GitHub Actions で取得し、同じパスワードで暗号化してこのリポジトリに保存したもの。<b>株探</b>は毎週の定期取得(信用残の週次を積み増す)、<b>IRBANK</b> は使えなくなる前の一度きりの保存です。</p></div>
       <div id="archiveBody"></div>
     </section>
 
     <!-- 使い方 -->
     <section class="view page" data-view="about">
-      <div class="page-head"><h1>使い方・計算方法</h1><p>株価・決算・配当・信用残などの<b>実データを自分で確認するためのページ</b>です。AI による株価予測は表示しません(推定と書いた信用評価損益率だけは、下の方法で残高から計算した値です)。</p></div>
+      <div class="page-head"><p class="eyebrow">GUIDE</p><h1>使い方・計算方法</h1><p>株価・決算・配当・信用残などの<b>実データを自分で確認するためのページ</b>です。AI による株価予測は表示しません(推定と書いた信用評価損益率だけは、下の方法で残高から計算した値です)。</p></div>
       <div class="prose" id="aboutBody">
         <h2>データの出どころ</h2>
         <ul>
@@ -113,6 +140,7 @@
           <li>左の ― で水平線、╱ で2点のトレンドライン。描画は銘柄ごとにこの端末に保存されます。</li>
           <li>「サブチャート」で RSI・MACD・ストキャスティクスに加え、信用買残/売残・信用倍率・推定評価損益率・残高金額を下段に出せます。</li>
           <li>右のウォッチリストの「指数」で、日経平均・TOPIX・NASDAQ・S&amp;P500・VIX・米10年債・ドル円のチャートに切り替えられます(検索欄に「日経」などでも可)。日本株の指数では、サブチャートの信用残・信用倍率に市場の信用残を出します。株探・IRBANK から東証全体の値を保存できていればそれを、無ければ stockAI の対象銘柄(約400)の合計を使います。下段には指数の統計・投資部門別売買・騰落と業種を出します。</li>
+          <li>右上の Light / Dark / Prototype / Earth で表示テーマを切り替えます(Future Sight と同じテーマ。同じ github.io では選んだテーマが両方に効きます)。「/」キーで検索欄へ。</li>
           <li>「決」の印は決算発表日です(インジケーターで切り替え)。発表日の値動きは下段の「決算発表」タブで一覧できます。</li>
         </ul>
         <h2>信用残の金額と推定評価損益率</h2>
@@ -123,6 +151,7 @@
           <li><b>減った分</b>: 既定は先入れ先出し(古い建玉から返済)。制度信用の期日 6 か月(182日)を過ぎた建玉は、期日の終値で乗り換えたとみなして単価を置き直します。もう一つの方法(移動平均法)は、減った割合だけコストを比例で減らします。</li>
           <li><b>評価損益率</b>: 買い方 = 買残金額 ÷ 取得コスト − 1、売り方 = 1 − 売残金額 ÷ 取得コスト。</li>
         </ol>
+        <p>JPX などの公表ミスが分かっている日(現在は 2026-10-20 の日次信用残)は、表には ⚠ を付けて残し、前回比・金額・評価損益率・合計の計算から外します。</p>
         <p>最初の観測日は「その日の終値で建てた」と置くので、履歴の最初の約半年は 0% 寄りに出ます(表では薄く表示)。株式分割は、分割日の前後の残高の跳びから信用残が未調整かを自動判定して、金額が連続するように揃えます。一般信用・貸借の区別、現引き・現渡しは残高からは分からないため、あくまで目安です。</p>
         <p>全銘柄合計の推定損益率は、各銘柄の金額とコストを足し合わせてから割ったもの(金額加重)です。</p>
         <h2>株探・IRBANK の保存</h2>
@@ -133,6 +162,8 @@
       </div>
     </section>
   </main>
+    </div>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
   <script src="assets/vendor/lightweight-charts.standalone.production.js"></script>

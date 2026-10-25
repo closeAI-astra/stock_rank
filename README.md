@@ -1,6 +1,6 @@
 # Stock Rank
 
-stockAI(Future Sight)が集めた実データ(株価・決算・配当・財務・有報・信用残・貿易統計など)を、TradingView 風のチャートと表で自分で確認するためのページ。AI の予測株価は表示しません。GitHub Pages でそのまま動く静的サイトです(ビルド不要)。
+stockAI(Future Sight)が集めた実データ(株価・決算・配当・財務・有報・信用残・貿易統計など)を、TradingView 風のチャートと表で自分で確認するためのページ。AI の予測株価は表示しません。見た目(Light / Dark / Prototype / Earth のテーマ、サイドバー、表)は Future Sight から移植しており、テーマの選択は Future Sight と共有します。GitHub Pages でそのまま動く静的サイトです(ビルド不要)。
 
 ## ページ
 
