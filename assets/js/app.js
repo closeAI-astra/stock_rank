@@ -69,6 +69,7 @@
     tool: "cursor", pending: null,
   };
   const saveSettings = () => LS.set("stockrank-settings", S.set);
+  const isNarrow = () => window.matchMedia("(max-width: 860px)").matches;
   // =====================================================================
   // 入口(パスワード)
   // =====================================================================
@@ -304,6 +305,7 @@
   }
 
   async function loadSymbol(code) {
+    if (isNarrow() && S.sideMobile) { S.sideMobile = false; syncToolbar(); }
     if (code.startsWith("@")) return loadIndex(code);
     S.code = code; LS.set("stockrank-last", code);
     const row = S.byCode.get(code);
@@ -423,7 +425,8 @@
     $$("[data-toggle='magnet']").forEach((b) => b.classList.toggle("active", !!S.set.magnet));
     $$("[data-toggle='hide']").forEach((b) => b.classList.toggle("active", !!S.set.hideDrawings));
     $("#tvUndo").disabled = !undoStack.length; $("#tvRedo").disabled = !redoStack.length;
-    const side = S.set.sideOpen !== false, bottom = S.set.bottomOpen !== false;
+    // スマホ幅では右のパネルは画面を覆うので、保存した設定に関わらず閉じた状態から始める
+    const side = isNarrow() ? !!S.sideMobile : S.set.sideOpen !== false, bottom = S.set.bottomOpen !== false;
     $(".tvview")?.classList.toggle("side-closed", !side); $(".tvview")?.classList.toggle("bottom-closed", !bottom);
     $$("[data-rail='watch']").forEach((b) => b.classList.toggle("active", side)); $$("[data-rail='bottom']").forEach((b) => b.classList.toggle("active", bottom));
     $("#tvBottomToggle").textContent = bottom ? "▾" : "▴";
@@ -461,8 +464,8 @@
     // 右のパネル・下のパネル
     $$("[data-rail]").forEach((b) => b.addEventListener("click", () => {
       const k = b.dataset.rail;
-      if (k === "watch") S.set.sideOpen = S.set.sideOpen === false;
-      if (k === "detail") { S.set.sideOpen = true; requestAnimationFrame(() => $("#symCard")?.scrollIntoView({ block: "start", behavior: "smooth" })); }
+      if (k === "watch") { if (isNarrow()) S.sideMobile = !S.sideMobile; else S.set.sideOpen = S.set.sideOpen === false; }
+      if (k === "detail") { if (isNarrow()) S.sideMobile = true; else S.set.sideOpen = true; requestAnimationFrame(() => $("#symCard")?.scrollIntoView({ block: "start", behavior: "smooth" })); }
       if (k === "bottom") S.set.bottomOpen = S.set.bottomOpen === false;
       saveSettings(); syncToolbar();
     }));
