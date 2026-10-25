@@ -76,7 +76,7 @@
     return new Promise((resolve) => {
       const wrap = document.createElement("div"); wrap.id = "gate";
       wrap.innerHTML = `<form><h1>Stock Rank</h1><p>stockAI(Future Sight)と同じパスワードで開きます。</p>
-        <input type="password" autocomplete="current-password" placeholder="パスワード" required aria-label="パスワード">
+        <input type="password" autocomplete="current-password" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="パスワード" required aria-label="パスワード">
         <label><input type="checkbox"> この端末で覚える</label><button type="submit">開く</button><p class="gate-msg">${esc(message)}</p></form>`;
       document.body.appendChild(wrap);
       const form = $("form", wrap), pw = $("input[type=password]", wrap), rem = $("input[type=checkbox]", wrap), msg = $(".gate-msg", wrap), btn = $("button", wrap);

@@ -77,8 +77,13 @@
   }
 
   async function unlock(password, remember) {
-    const key = await derive(password);
-    if (!(await checkKey(key))) return false;
+    // スマホのキーボードやパスワード管理ソフトが前後に空白を付けることがあるので、そのままで違えば空白を除いて試す
+    let key = await derive(password);
+    if (!(await checkKey(key))) {
+      if (password.trim() === password) return false;
+      key = await derive(password.trim());
+      if (!(await checkKey(key))) return false;
+    }
     state.key = key;
     try {
       const raw = toB64(await crypto.subtle.exportKey("raw", key));
