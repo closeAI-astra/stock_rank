@@ -46,6 +46,22 @@ stockAI(Future Sight)が集めた実データ(株価・決算・配当・財務�
 | 指数 → 市場の需給 | NT 倍率、騰落レシオ(25日)、移動平均線より上の割合、52週新高値・新安値、信用買残の時価総額比(対象銘柄から) |
 | ランキング | 期日 3か月内の買残比、RS 順位、為替感応度、β |
 
+## 機関の需給データ(JPX・日証金・EDINET)
+
+GitHub Actions の **Institutional data**(`scripts/inst_data.py`)が平日の 08:43 と 19:13(日本時間)に取得し、暗号化して `data/inst/` に積み増します。JPX は直近約3週間分、日証金はその日の分しか置かれないため、毎日取って履歴を作ります(JPX・日証金は GitHub Actions から取得できることを確認済み)。
+
+| 取得元 | 内容 | 画面 |
+| --- | --- | --- |
+| JPX 空売り残高情報 | 発行済の 0.5% 以上の空売りポジションの報告(報告者・割合・株数・前回) | 銘柄の「空売り・貸借・大量保有」タブ |
+| JPX 空売り集計 | 東証の空売り比率(価格規制あり/なし)・業種別 | 指数 → 市場の需給 |
+| JPX 裁定取引 | 裁定取引に係る現物ポジション(買い・売り、千株) | 指数 → 市場の需給 |
+| 日本証券金融 | 銘柄別の融資・貸株残高、貸借倍率、品貸料(逆日歩)、制限措置 | 銘柄の「空売り・貸借・大量保有」タブ |
+| EDINET API v2 | 大量保有報告書(提出者・保有割合・前回の割合・保有目的)、自己株券買付状況報告書 | 同上 |
+
+EDINET は API キーが要ります。EDINET の API 利用登録で発行したキーを、Settings → Secrets and variables → Actions に `EDINET_API_KEY` として登録すると、次の実行から取得します(初回は 365 日さかのぼる)。キーが無い間は EDINET だけ飛ばします。
+
+形式が変わったときは、Actions → Institutional data → Run workflow で `mode=probe` を選ぶと、各ページのファイルの一覧と中身の先頭を表示します。
+
 ## 推定信用評価損益率
 
 個別銘柄の信用評価損益率は公表されていないため、申込日ごとの残高と日足から推定します(`assets/js/credit.js`)。
@@ -116,6 +132,7 @@ Settings → Pages → Source を「Deploy from a branch」にして、このブ
 node tests/credit.test.js                  # 推定評価損益率の計算
 node tests/analytics.test.js               # VWAP・価格帯別出来高・進捗率・回帰・権利落ち・信用期日
 python -m unittest tests/test_archive.py   # 株探・IRBANK の表の取り出し・ページ送り・暗号
+python -m unittest tests/test_inst.py      # JPX・日証金・EDINET のファイルの取り出し
 python tests/make_mock.py OUT pass          # 偽の stockAI データ(画面の確認用)
 python tests/fake_sites.py 8765             # 偽の株探・IRBANK(KABUTAN_BASE / IRBANK_BASE で向ける)
 ```

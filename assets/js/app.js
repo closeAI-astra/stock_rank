@@ -1242,7 +1242,14 @@
     const m = S.instMarket; if (!m) return `<div class="row-head"><h3>空売り比率・裁定取引残高(JPX)</h3></div><div class="empty">まだ取得していません。<br><small>GitHub Actions の「Institutional data」(mode=update)で JPX から取得します。</small></div>`;
     const out = [];
     const sr = (m.shortRatio || []).filter((r) => num(r.ratio) !== null);
-    if (sr.length) { const l = sr.at(-1); out.push(`<div class="row-head"><h3>空売り比率(東証・売買代金ベース)</h3><small>${esc(l.date)} ${(l.ratio * 100).toFixed(1)}% · 40% 超が続くと売られすぎ(買い戻し待ち)の目安 · 価格規制あり ${pct(l.restrictedShare, 1).replace("+", "")} / なし</small></div>${mini("miniSR", 170, (c) => { const s = c.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, title: "空売り比率", priceFormat: { type: "custom", formatter: (v) => `${v.toFixed(1)}%`, minMove: 0.1 } }); s.setData(sr.map((r) => ({ time: r.date, value: r.ratio * 100 }))); s.createPriceLine({ price: 40, color: alpha(css("--down"), 0.6), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "40%" }); })}`); }
+    if (sr.length) { const l = sr.at(-1); out.push(`<div class="row-head"><h3>空売り比率(東証・売買代金ベース)</h3><small>${esc(l.date)} ${(l.ratio * 100).toFixed(1)}%(うち価格規制ありの空売り ${(l.restrictedShare * 100).toFixed(1)}%)· 40% 超が続くと売られすぎ(買い戻し待ち)の目安</small></div>${mini("miniSR", 170, (c) => { const s = c.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, title: "空売り比率", priceFormat: { type: "custom", formatter: (v) => `${v.toFixed(1)}%`, minMove: 0.1 } }); s.setData(sr.map((r) => ({ time: r.date, value: r.ratio * 100 }))); s.createPriceLine({ price: 40, color: alpha(css("--down"), 0.6), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: "40%" }); })}`); }
+    const secDates = Object.keys(m.shortSectors || {}).sort();
+    if (secDates.length) {
+      const lastD = secDates.at(-1), recent = secDates.slice(-20); const latest = m.shortSectors[lastD];
+      const avg = (sec) => { const v = recent.map((d) => m.shortSectors[d]?.[sec]).filter((x) => num(x) !== null); return v.length ? v.reduce((p, x) => p + x, 0) / v.length : null; };
+      const list = Object.entries(latest).map(([sec, r]) => ({ sec, r, a: avg(sec) })).sort((x, y) => y.r - x.r);
+      out.push(`<div class="row-head"><h3>業種別の空売り比率</h3><small>${esc(lastD)} · 直近 ${recent.length}日の平均と比べて高い業種は売り圧力が強い</small></div><div class="table-wrap"><table class="grid"><thead><tr><th>業種</th><th>空売り比率</th><th>${recent.length}日平均</th><th>差</th></tr></thead><tbody>${list.map((x) => `<tr><th>${esc(x.sec)}</th><td>${(x.r * 100).toFixed(1)}%</td><td>${x.a === null ? "—" : `${(x.a * 100).toFixed(1)}%`}</td><td class="${cls(x.a === null ? null : x.a - x.r)}">${x.a === null ? "—" : `${((x.r - x.a) * 100 >= 0 ? "+" : "")}${((x.r - x.a) * 100).toFixed(1)}pt`}</td></tr>`).join("")}</tbody></table></div>`);
+    }
     const ar = (m.arbitrage || []).filter((r) => num(r.buy) !== null || num(r.sell) !== null);
     if (ar.length) { const l = ar.at(-1); out.push(`<div class="row-head"><h3>裁定取引残高(現物の買い・売り)</h3><small>${esc(l.date)} 買い ${fmt(l.buy)} / 売り ${fmt(l.sell)}(${esc(m.arbitrageUnit || "")})· 買い残が積み上がるほど、解消売り(先物主導の下げ)の余地が大きい</small></div>${mini("miniArb", 170, (c) => { const a = c.addSeries(LW.LineSeries, { color: css("--credit-buy"), lineWidth: 2, title: "裁定買い残", priceFormat: { type: "volume" } }); a.setData(ar.filter((r) => num(r.buy) !== null).map((r) => ({ time: r.date, value: r.buy }))); const b = c.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, title: "裁定売り残", priceFormat: { type: "volume" } }); b.setData(ar.filter((r) => num(r.sell) !== null).map((r) => ({ time: r.date, value: r.sell }))); })}`); }
     return out.join("") + `<p class="foot">JPX 公表。取得: ${esc(String(m.updatedAt || "").slice(0, 16).replace("T", " "))}</p>`;
@@ -1303,9 +1310,12 @@
   //   buyback: [{date, docID, desc, filer}]                             … 自己株券買付状況報告書
   const EDINET_DOC = (id) => `https://disclosure2.edinet-fsa.go.jp/WZEK0040.aspx?${encodeURIComponent(id)}`;
   // 報告日ごとに「その時点で残っている各報告者の最新の割合」を足した合計
+  // 報告者 + 委託者 + ファンドで1つのポジション(同じ運用会社でもファンドが違えば別に報告される)
+  const shortKey = (r) => `${r.holder}|${r.client || ""}|${r.fund || ""}`;
+  const shortName = (r) => `${r.holder}${r.client ? ` / ${r.client}` : ""}${r.fund ? `(${r.fund})` : ""}`;
   function shortTotals(shorts) {
     const list = (shorts || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1)); const cur = new Map(); const out = new Map();
-    list.forEach((r) => { cur.set(r.holder, r); out.set(r.date, [...cur.values()].reduce((p, x) => p + (num(x.ratio) || 0), 0)); });
+    list.forEach((r) => { cur.set(shortKey(r), r); out.set(r.date, [...cur.values()].reduce((p, x) => p + (num(x.ratio) || 0), 0)); });
     return [...out.entries()].map(([time, value]) => ({ time, value }));
   }
   function tabInst(d, cur) {
@@ -1314,13 +1324,13 @@
     const parts = [];
     const shorts = x.shorts || [];
     if (shorts.length) {
-      const latest = new Map(); shorts.slice().sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((r) => latest.set(r.holder, r));
+      const latest = new Map(); shorts.slice().sort((a, b) => (a.date < b.date ? -1 : 1)).forEach((r) => latest.set(shortKey(r), r));
       const active = [...latest.values()].filter((r) => num(r.ratio) > 0).sort((a, b) => b.ratio - a.ratio);
       const tot = shortTotals(shorts); const last = tot.at(-1);
-      parts.push(`<div class="cards"><article><span>報告された空売り残高の合計</span><strong>${last ? `${last.value.toFixed(2)}<small>%</small>` : "—"}</strong><em>${last ? `${esc(last.time)} 時点 · 発行済株式に対する割合` : ""} · ${active.length}社</em></article>${active.slice(0, 3).map((r) => `<article><span>${esc(r.holder)}</span><strong>${num(r.ratio).toFixed(2)}<small>%</small></strong><em>${esc(r.date)} · ${fmt(r.shares)}株${num(r.prevRatio) !== null ? ` · 前回 ${num(r.prevRatio).toFixed(2)}%` : ""}</em></article>`).join("")}</div>
+      parts.push(`<div class="cards"><article><span>報告された空売り残高の合計</span><strong>${last ? `${last.value.toFixed(2)}<small>%</small>` : "—"}</strong><em>${last ? `${esc(last.time)} 時点 · 発行済株式に対する割合` : ""} · ${active.length}社</em></article>${active.slice(0, 3).map((r) => `<article><span>${esc(shortName(r))}</span><strong>${num(r.ratio).toFixed(2)}<small>%</small></strong><em>${esc(r.date)} · ${fmt(r.shares)}株${num(r.prevRatio) !== null ? ` · 前回 ${num(r.prevRatio).toFixed(2)}%` : ""}</em></article>`).join("")}</div>
         <div class="row-head"><h3>空売り残高の報告(発行済の 0.5% 以上)</h3><small>JPX 公表。0.5% を下回ると報告されなくなる(下回った回は 0% 前後で報告)</small></div>
         ${tot.length > 1 ? mini("miniShort", 170, (c) => { const s = c.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, lineType: LW.LineType.WithSteps, title: "報告の合計", priceFormat: { type: "custom", formatter: (v) => `${v.toFixed(2)}%`, minMove: 0.01 } }); s.setData(tot); }) : ""}
-        <div class="table-wrap tall"><table class="grid"><thead><tr><th>計算日</th><th class="left">報告者</th><th>割合</th><th>株数</th><th>前回</th><th>増減</th></tr></thead><tbody>${shorts.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 400).map((r) => { const ch = num(r.ratio) !== null && num(r.prevRatio) !== null ? r.ratio - r.prevRatio : null; return `<tr><th>${esc(r.date)}</th><td class="left">${esc(r.holder)}</td><td>${num(r.ratio) === null ? "—" : `${num(r.ratio).toFixed(2)}%`}</td><td>${fmt(r.shares)}</td><td>${num(r.prevRatio) === null ? "—" : `${num(r.prevRatio).toFixed(2)}%<small>${esc(r.prevDate || "")}</small>`}</td><td class="${cls(ch === null ? null : -ch)}">${ch === null ? "—" : `${ch >= 0 ? "+" : ""}${ch.toFixed(2)}pt`}</td></tr>`; }).join("")}</tbody></table></div>`);
+        <div class="table-wrap tall"><table class="grid"><thead><tr><th>計算日</th><th class="left">報告者</th><th>割合</th><th>株数</th><th>前回</th><th>増減</th></tr></thead><tbody>${shorts.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 400).map((r) => { const ch = num(r.ratio) !== null && num(r.prevRatio) !== null ? r.ratio - r.prevRatio : null; return `<tr><th>${esc(r.date)}</th><td class="left">${esc(shortName(r))}</td><td>${num(r.ratio) === null ? "—" : `${num(r.ratio).toFixed(2)}%`}</td><td>${fmt(r.shares)}</td><td>${num(r.prevRatio) === null ? "—" : `${num(r.prevRatio).toFixed(2)}%<small>${esc(r.prevDate || "")}</small>`}</td><td class="${cls(ch === null ? null : -ch)}">${ch === null ? "—" : `${ch >= 0 ? "+" : ""}${ch.toFixed(2)}pt`}</td></tr>`; }).join("")}</tbody></table></div>`);
     }
     const lend = x.lending || [];
     if (lend.length) {
