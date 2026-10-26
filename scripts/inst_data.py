@@ -643,9 +643,14 @@ def parse_margin_current(rows: list[list]) -> dict | None:
         sell, buy = num(r[4]), num(r[6])
         if sell is None and buy is None:
             continue
-        if "合計" in section and "株数" in kind:
-            total = (sell, buy)
-        elif "株数" in kind:
+        if "合計" in section:
+            if "株数" in kind:
+                total = (sell, buy)
+                break  # 合計より下は別の表(貸借取引など)なので足さない
+            continue
+        if "制度" not in section and "一般" not in section:
+            continue
+        if "株数" in kind:
             sh["sell"] += sell or 0; sh["buy"] += buy or 0
             if "制度" in section:
                 std_buy += buy or 0
@@ -663,6 +668,10 @@ def run_jpx_margin(f: Fetcher, store: Store, index: dict) -> dict:
     market = store.load("market", {})
     rows = market.get("margin", [])
     done = set(index.get("jpxMarginFiles", []))
+    if index.get("jpxMarginVersion") != 2:
+        # v1 は週次ファイルの金額に別の表の行まで足していたので、全部読み直す
+        rows, done = [], set()
+        index["jpxMarginVersion"] = 2
     for page, pat, parser in ((JPX_MARGIN_HIST_PAGE, r"_mtgk\.xlsx?$", parse_margin_history), (JPX_MARGIN_NOW_PAGE, r"_mtcurrent\.xlsx?$", parse_margin_current)):
         for u in sorted(x for x, _ in page_files(f, page, pat) if x not in done):
             raw = fetch_bytes(f, u)
