@@ -65,8 +65,9 @@ class ParseTest(unittest.TestCase):
         self.assertEqual([(n, u) for n, u, _ in ia.IRBank("https://irbank.net").market_pages(p["anchors"], 10)], [("market_margin", "https://irbank.net/market/margin")])
 
     def test_irbank_edinet_pages(self):
-        p = ia.parse_html("<a href='/7203/margin'>m</a><a href='/E02144/pl'>PL</a><a href='/E02144'>top</a>")
-        self.assertEqual([n for n, _ in ia.IRBank("https://irbank.net").subpages("7203", p["links"], "full")], ["margin", "E02144_pl", "E02144_top"])
+        # データのページ(信用残・日証金・財務)だけを取り、開示書類・時価総額の推移・EDINET のトップなどは取らない
+        p = ia.parse_html("<a href='/7203/margin'>m</a><a href='/7203/nisshokin'>n</a><a href='/7203/cap'>c</a><a href='/7203/140120181113436778'>doc</a><a href='/E02144/pl'>PL</a><a href='/E02144/tdnet'>t</a><a href='/E02144'>top</a>")
+        self.assertEqual([n for n, _ in ia.IRBank("https://irbank.net").subpages("7203", p["links"], "full")], ["margin", "nisshokin", "E02144_pl"])
 
     def test_merge_margin(self):
         old = [{"date": "2026-01-02", "buy": 1}, {"date": "2026-01-09", "buy": 2}]
