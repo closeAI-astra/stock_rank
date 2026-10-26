@@ -437,3 +437,21 @@ table.grid td small { display: block; color: var(--muted); font-size: 10px; font
   .settings-link { padding: 8px 10px; }
 }
 @media (max-width: 860px) { .tv-sym { max-width: 46vw; } }
+
+/* 売買の記録 */
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.danger { color: var(--down); border-color: color-mix(in srgb, var(--down) 50%, var(--line)); margin-right: auto; }
+label.btn { cursor: pointer; display: inline-flex; align-items: center; }
+.trade-box { width: min(440px, 94vw); }
+.trade-form { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; padding: 14px 16px 16px; }
+.trade-form label { display: grid; gap: 4px; font-size: 12px; color: var(--tv-muted, var(--muted)); }
+.trade-form input[type=date], .trade-form input[type=number], .trade-form input[type=text] { height: 34px; padding: 0 10px; border: 1px solid var(--tv-border, var(--line)); border-radius: 6px; background: var(--tv-bg, var(--panel)); color: var(--tv-text, var(--text)); font-size: 14px; }
+.trade-form .wide { grid-column: 1 / -1; }
+.trade-side { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.trade-side label { display: block; cursor: pointer; }
+.trade-side input { position: absolute; opacity: 0; pointer-events: none; }
+.trade-side span { display: block; text-align: center; padding: 8px; border: 1px solid var(--tv-border, var(--line)); font-weight: 700; color: var(--tv-text, var(--text)); }
+.trade-side label:first-child span { border-radius: 6px 0 0 6px; } .trade-side label:last-child span { border-radius: 0 6px 6px 0; }
+.trade-side input[value=buy]:checked + span { background: #e53935; border-color: #e53935; color: #fff; }
+.trade-side input[value=sell]:checked + span { background: #1e88e5; border-color: #1e88e5; color: #fff; }
+.trade-actions { display: flex; justify-content: flex-end; gap: 8px; }

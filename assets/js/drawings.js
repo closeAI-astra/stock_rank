@@ -131,5 +131,47 @@
       });
     }
   }
-  root.SRDraw = { DrawingLayer, VolumeProfile, POINTS };
+  // 自分の売買の点(買い=赤・売り=青)と、対応する売買どうしを結ぶ薄い線(カブー・moomoo 風)
+  //   opts.data() … {trades, pairs} / opts.toX(date) / opts.toY(price) / opts.colors() … {buy, sell, line, win, loss, text}
+  class TradeMarkers {
+    constructor(opts) { this.opts = opts; this.visible = true; this._view = { zOrder: () => "top", renderer: () => ({ draw: (t) => this._draw(t) }) }; }
+    attached({ requestUpdate }) { this._req = requestUpdate; }
+    detached() { this._req = null; }
+    update() { this._req?.(); }
+    updateAllViews() {}
+    paneViews() { return [this._view]; }
+    _draw(target) {
+      const d = this.visible ? this.opts.data() : null; if (!d || !d.trades?.length) return;
+      target.useMediaCoordinateSpace(({ context: ctx }) => {
+        const c = this.opts.colors(); const pt = (t) => { const x = this.opts.toX(t.date), y = this.opts.toY(Number(t.price)); return x === null || y === null ? null : { x, y }; };
+        ctx.save(); ctx.font = "10px -apple-system, 'Segoe UI', 'Noto Sans JP', sans-serif";
+        // 線(下に描く)
+        (d.pairs || []).forEach((p) => {
+          const a = pt(p.open), b = pt(p.close); if (!a || !b) return;
+          ctx.strokeStyle = c.line; ctx.globalAlpha = 0.55; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.setLineDash([]);
+          if (p.pnlPct !== null && p.pnlPct !== undefined) {
+            ctx.globalAlpha = 0.95; ctx.fillStyle = p.pnl >= 0 ? c.win : c.loss; ctx.textAlign = "left";
+            ctx.fillText(`${p.pnlPct >= 0 ? "+" : ""}${(p.pnlPct * 100).toFixed(1)}%`, b.x + 6, b.y + (b.y < a.y ? -6 : 12));
+          }
+        });
+        // 点
+        ctx.globalAlpha = 1;
+        d.trades.forEach((t) => {
+          const q = pt(t); if (!q) return;
+          ctx.beginPath(); ctx.arc(q.x, q.y, 4, 0, Math.PI * 2); ctx.fillStyle = t.side === "buy" ? c.buy : c.sell; ctx.fill();
+          ctx.lineWidth = 1.2; ctx.strokeStyle = c.ring; ctx.stroke();
+        });
+        ctx.restore();
+      });
+    }
+    // 画面上の点 (x, y) の近く(6px)にある売買
+    hit(x, y) {
+      const d = this.opts.data(); if (!d) return null;
+      let best = null, bd = 7;
+      (d.trades || []).forEach((t) => { const px = this.opts.toX(t.date), py = this.opts.toY(Number(t.price)); if (px === null || py === null) return; const dd = Math.hypot(px - x, py - y); if (dd < bd) { bd = dd; best = t; } });
+      return best;
+    }
+  }
+  root.SRDraw = { DrawingLayer, VolumeProfile, TradeMarkers, POINTS };
 })(window);

@@ -45,6 +45,7 @@ stockAI(Future Sight)が集めた実データ(株価・決算・配当・財務�
 | 配当タブ | 権利落ちの値動き(権利付き最終日までの上昇、落ち日の TOPIX 比、配当との差、落ちた後) |
 | 指数 → 市場の需給 | NT 倍率、騰落レシオ(25日)、移動平均線より上の割合、52週新高値・新安値、信用買残の時価総額比(対象銘柄から) |
 | ランキング | 期日 3か月内の買残比、RS 順位、為替感応度、β |
+| 売買記録 | 自分の売買をチャートに表示(買い=赤・売り=青の点、先入れ先出しで対応する売買を薄い線で結び損益率を表示)。描画ツールの「売買を記録」でチャートをクリック、またはフォーム・証券会社の約定履歴 CSV(SBI・楽天など)から追加。記録はこの端末のブラウザだけに保存し、CSV で書き出し・読み込み |
 
 ## 機関の需給データ(JPX・日証金・EDINET)
 
@@ -133,6 +134,7 @@ Settings → Pages → Source を「Deploy from a branch」にして、このブ
 ```sh
 node tests/credit.test.js                  # 推定評価損益率の計算
 node tests/analytics.test.js               # VWAP・価格帯別出来高・進捗率・回帰・権利落ち・信用期日
+node tests/trades.test.js                  # 売買の記録の対応づけ・CSV
 python -m unittest tests/test_archive.py   # 株探・IRBANK の表の取り出し・ページ送り・暗号
 python -m unittest tests/test_inst.py      # JPX・日証金・EDINET のファイルの取り出し
 python tests/make_mock.py OUT pass          # 偽の stockAI データ(画面の確認用)

@@ -67,6 +67,7 @@
     cur: null, // 表示中の銘柄 {code, daily, weekly, splits, detail, archives: {kabutan, irbank}, est, credit}
     archiveIndex: {}, // 取得元ごとの index(未読込は undefined、無ければ null)
     tool: "cursor", pending: null,
+    trades: (window.SRTrades ? SRTrades.load() : []), // 自分の売買の記録(この端末だけ)
   };
   const saveSettings = () => LS.set("stockrank-settings", S.set);
   const isNarrow = () => window.matchMedia("(max-width: 860px)").matches;
@@ -112,7 +113,7 @@
     SRData.fs("evidence").then((x) => { S.evidence = x; if (S.set.bottomTab === "profile") renderBottom(); }).catch(() => { S.evidence = null; });
     $("#asOf").textContent = S.dash.asOf ? `${String(S.dash.asOf).slice(0, 16).replace("T", " ")} 時点のデータ` : "";
     document.body.classList.remove("loading");
-    buildToolbar(); bindChartUi(); bindLegend(); bindModals(); bindSearch(); bindWatch(); bindSidebar(); renderWatch();
+    buildToolbar(); bindChartUi(); bindLegend(); bindModals(); bindTrades(); bindSearch(); bindWatch(); bindSidebar(); renderWatch();
     window.addEventListener("hashchange", route);
     route();
   }
@@ -409,7 +410,7 @@
   const STOCK_ONLY_IND = new Set(["avgcost", "sellcost", "perband", "pbrband", "earnings", "avwap_earn"]);
   const COMPARE_COLORS = ["#ff9800", "#ab47bc", "#00bcd4", "#e91e63"];
   const CHART_TYPES = [["candle", "ローソク足", "▮"], ["hollow", "中空ローソク足", "▯"], ["ha", "平均足", "▮"], ["bar", "バー", "⫶"], ["line", "ライン", "╱"], ["area", "エリア", "◺"], ["baseline", "ベースライン", "⫠"]];
-  let compareSeries = []; let drawLayer = null; let vpLayer = null;
+  let compareSeries = []; let drawLayer = null; let vpLayer = null; let tradeLayer = null;
   S.compare = [];
 
   // ---------- ツールバー ----------
@@ -527,7 +528,7 @@
   }
 
   // ---------- 描画ツール ----------
-  const TOOL_HINT = { trend: "トレンドライン: 始点をクリック", ray: "水平レイ: 始点をクリック", hline: "水平線: 価格をクリック", vline: "垂直線: 日付をクリック", fib: "フィボナッチ: 高値(または安値)をクリック", rect: "長方形: 角をクリック", measure: "計測: 始点をクリック", text: "テキスト: 置く場所をクリック", avwap: "アンカード VWAP: 起点の足をクリック" };
+  const TOOL_HINT = { trend: "トレンドライン: 始点をクリック", ray: "水平レイ: 始点をクリック", hline: "水平線: 価格をクリック", vline: "垂直線: 日付をクリック", fib: "フィボナッチ: 高値(または安値)をクリック", rect: "長方形: 角をクリック", measure: "計測: 始点をクリック", text: "テキスト: 置く場所をクリック", avwap: "アンカード VWAP: 起点の足をクリック", trade: "売買を記録: 約定した足と価格のあたりをクリック" };
   let undoStack = [], redoStack = [];
   function pushUndo() { undoStack.push(JSON.stringify(S.drawings)); if (undoStack.length > 50) undoStack.shift(); redoStack = []; syncToolbar(); }
   function undo() { if (!undoStack.length) return; redoStack.push(JSON.stringify(S.drawings)); const prev = JSON.parse(undoStack.pop()); S.drawings.splice(0, S.drawings.length, ...prev); saveDrawings(); }
@@ -579,6 +580,8 @@
     if (param.paneIndex && param.paneIndex !== 0) return;
     const a = anchorFrom(param); if (!a) return;
     const tool = param.sourceEvent?.shiftKey && S.tool === "cursor" ? "measure" : S.tool;
+    if (tool === "trade") { if (!S.cur?.isIndex) openTradeModal({ date: logicalToDate(chart.timeScale().coordinateToLogical(param.point.x)) || a.t, price: a.p }); setTool("cursor"); return; }
+    if (tool === "cursor" && tradeLayer?.visible) { const t = tradeLayer.hit(param.point.x, param.point.y); if (t) { openTradeModal(t); return; } }
     if (tool === "cursor") { const i = drawLayer.hitTest2(param.point.x, param.point.y); drawLayer.selected = i; drawLayer.update(); return; }
     const need = SRDraw.POINTS[tool] || 1;
     if (need === 1 || S.pending) {
@@ -679,6 +682,9 @@
     // 描画(トレンドライン・水平線など)は主系列に付けたプリミティブで描く
     drawLayer = drawLayer || new SRDraw.DrawingLayer({ toX: dateToX, toY: (p) => mainSeries?.priceToCoordinate(p) ?? null, fmt: fmtPrice, color: () => css("--draw"), bars: barsBetween, avwap: avwapPoints });
     mainSeries.attachPrimitive(drawLayer); drawLayer.items = S.drawings; drawLayer.hidden = !!S.set.hideDrawings; drawLayer.selected = -1; drawLayer.preview = null;
+    // 自分の売買(買い=赤・売り=青の点、対応する売買を薄い線で結ぶ)
+    tradeLayer = tradeLayer || new SRDraw.TradeMarkers({ data: tradeData, toX: dateToX, toY: (p) => mainSeries?.priceToCoordinate(p) ?? null, colors: () => ({ buy: "#e53935", sell: "#1e88e5", ring: css("--tv-bg"), line: css("--tv-text"), win: UP(), loss: DOWN() }) });
+    mainSeries.attachPrimitive(tradeLayer); tradeLayer.visible = S.set.showTrades !== false;
 
     const closes = bars.map((r) => r.c);
     const addLine = (values, color, extra, pane = 0) => { const s = chart.addSeries(LW.LineSeries, lineOpts(color, { priceFormat, ...extra }), pane); s.setData(bars.map((r, i) => (Number.isFinite(values[i]) ? { time: r.time, value: values[i] } : { time: r.time }))); (pane ? paneSeries : overlay).push(s); return s; };
@@ -821,16 +827,20 @@
     // その足の時点の最新の信用残
     let cr = null; for (const x of S.cur.est.rows) { if (x.date <= r.end) cr = x; else break; }
     const crLine = cr && S.cur.isIndex ? `<div class="lg-line lg-credit"><em>信用残 ${esc(S.cur.creditLabel)} ${esc(cr.date)}</em> <span>買残 <b class="cb">${fmt(cr.buy)}</b></span> <span>売残 <b class="cs">${fmt(cr.sell)}</b></span> <span>倍率 <b>${fmt(cr.ratio, 2)}</b></span></div>` : cr ? `<div class="lg-line lg-credit"><em>信用 ${esc(cr.date)}</em> <span>買残 <b class="cb">${fmt(cr.buy)}</b></span> <span>売残 <b class="cs">${fmt(cr.sell)}</b></span> <span>倍率 <b>${fmt(cr.ratio, 2)}</b></span> <span>買残金額 <b>${oku(cr.buyAmount)}</b></span> <span>推定損益 買 <b class="${cls(cr.buyPnl)}">${pct(cr.buyPnl)}</b> / 売 <b class="${cls(cr.sellPnl)}">${pct(cr.sellPnl)}</b>${cr.warmup ? ' <small title="履歴の最初の半年は推定が不安定">(参考)</small>' : ""}</span></div>` : "";
+    const myTrades = S.cur.isIndex ? [] : tradesFor(S.code);
+    const barTrades = myTrades.filter((t) => t.date >= r.start && t.date <= r.end);
+    const trLine = myTrades.length ? `<div class="lg-ind ${S.set.showTrades === false ? "off" : ""}"><span>売買の記録(${myTrades.length}件)</span>${barTrades.length && S.set.showTrades !== false ? ` ${barTrades.map((t) => `<b style="color:${t.side === "buy" ? "#e53935" : "#1e88e5"}">${t.side === "buy" ? "買" : "売"} ${fmt(t.qty)}株 @${fmtPrice(t.price)}</b>`).join(" ")}` : ""}<span class="lg-btns"><button type="button" data-lg-trades title="表示/非表示">👁</button></span></div>` : "";
     const ev = S.earnMarks?.get(r.time);
     const evLine = ev ? `<div class="lg-line lg-earn"><em>決算発表 ${esc(ev.date)}</em> <b>${esc(ev.period || "")}</b>${ev.sales !== null && ev.sales !== undefined ? ` <span>売上高 ${mil(ev.sales)}</span>` : ""}${ev.op !== null && ev.op !== undefined ? ` <span>営業利益 ${mil(ev.op)}${ev.opYoy !== null && ev.opYoy !== undefined ? `(${pct(ev.opYoy)})` : ""}</span>` : ""}${ev.react5 !== null && ev.react5 !== undefined ? ` <span>発表後5日 <b class="${cls(ev.react5)}">${pct(ev.react5)}</b></span>` : ""}</div>` : "";
     const title = S.cur.isIndex ? `${esc(S.cur.idx.name)} · ${iv} · ${esc(S.cur.idx.symbol)}` : `${esc(row?.name || "")} · ${iv} · 東証`;
-    $("#tvLegend").innerHTML = `<div class="lg-line lg-head"><strong>${title}</strong> <span>始<b class="${k}">${fmtPrice(r.o)}</b></span><span>高<b class="${k}">${fmtPrice(r.h)}</b></span><span>安<b class="${k}">${fmtPrice(r.l)}</b></span><span>終<b class="${k}">${fmtPrice(r.c)}</b></span>${chg === null ? "" : `<b class="${k}">${chg >= 0 ? "+" : ""}${fmtPrice(chg)} (${pct(ch, 2)})</b>`} <small>${esc(r.start === r.end ? r.start : `${r.start}〜${r.end}`)}</small></div>${indRows}${cmp}${evLine}${crLine}`;
+    $("#tvLegend").innerHTML = `<div class="lg-line lg-head"><strong>${title}</strong> <span>始<b class="${k}">${fmtPrice(r.o)}</b></span><span>高<b class="${k}">${fmtPrice(r.h)}</b></span><span>安<b class="${k}">${fmtPrice(r.l)}</b></span><span>終<b class="${k}">${fmtPrice(r.c)}</b></span>${chg === null ? "" : `<b class="${k}">${chg >= 0 ? "+" : ""}${fmtPrice(chg)} (${pct(ch, 2)})</b>`} <small>${esc(r.start === r.end ? r.start : `${r.start}〜${r.end}`)}</small></div>${indRows}${trLine}${cmp}${evLine}${crLine}`;
   }
   // 凡例のボタン(👁 / ✕)
   function bindLegend() {
     $("#tvLegend").addEventListener("click", (e) => {
       const eye = e.target.closest("[data-lg-eye]"), del = e.target.closest("[data-lg-del]"), cmp = e.target.closest("[data-lg-cmp]");
-      if (eye) { const k = eye.dataset.lgEye; const h = new Set(S.set.hiddenInd || []); h.has(k) ? h.delete(k) : h.add(k); S.set.hiddenInd = [...h]; }
+      if (e.target.closest("[data-lg-trades]")) { S.set.showTrades = S.set.showTrades === false; }
+      else if (eye) { const k = eye.dataset.lgEye; const h = new Set(S.set.hiddenInd || []); h.has(k) ? h.delete(k) : h.add(k); S.set.hiddenInd = [...h]; }
       else if (del) { S.set.ind = S.set.ind.filter((x) => x !== del.dataset.lgDel); }
       else if (cmp) { S.compare.splice(Number(cmp.dataset.lgCmp), 1); }
       else return;
@@ -951,7 +961,7 @@
   // =====================================================================
   // 下段のタブ(信用残・株探/IRBANK の企業データ)
   // =====================================================================
-  const BOTTOM_TABS = [["credit", "信用残・金額・評価損益"], ["inst", "空売り・貸借・大量保有"], ["risk", "感応度・リスク"], ["progress", "決算進捗"], ["perf", "業績"], ["quarter", "四半期"], ["fin", "財務"], ["ind", "指標"], ["val", "株価指標"], ["div", "配当"], ["seg", "セグメント"], ["peers", "競合"], ["earn", "決算発表"], ["quality", "財務の質"], ["edinet", "有報"], ["people", "人的資本"], ["profile", "会社情報"], ["saved", "株探・IRBANK 保存"]];
+  const BOTTOM_TABS = [["credit", "信用残・金額・評価損益"], ["trades", "売買記録"], ["inst", "空売り・貸借・大量保有"], ["risk", "感応度・リスク"], ["progress", "決算進捗"], ["perf", "業績"], ["quarter", "四半期"], ["fin", "財務"], ["ind", "指標"], ["val", "株価指標"], ["div", "配当"], ["seg", "セグメント"], ["peers", "競合"], ["earn", "決算発表"], ["quality", "財務の質"], ["edinet", "有報"], ["people", "人的資本"], ["profile", "会社情報"], ["saved", "株探・IRBANK 保存"]];
   function renderBottom() {
     const tabs = $("#bottomTabs"); const cur = S.cur;
     const set = cur?.isIndex ? INDEX_TABS : BOTTOM_TABS; const kind = cur?.isIndex ? "index" : "stock";
@@ -973,7 +983,7 @@
       mountMini();
       return;
     }
-    const fn = { credit: tabCredit, inst: tabInst, risk: tabRisk, progress: tabProgress, quality: tabQuality, perf: tabPerf, quarter: tabQuarter, fin: tabFin, ind: tabInd, val: tabVal, div: tabDiv, seg: tabSeg, peers: tabPeers, earn: tabEarn, edinet: tabEdinet, people: tabPeople, profile: tabProfile, saved: tabSaved }[S.set.bottomTab] || tabCredit;
+    const fn = { credit: tabCredit, trades: tabTrades, inst: tabInst, risk: tabRisk, progress: tabProgress, quality: tabQuality, perf: tabPerf, quarter: tabQuarter, fin: tabFin, ind: tabInd, val: tabVal, div: tabDiv, seg: tabSeg, peers: tabPeers, earn: tabEarn, edinet: tabEdinet, people: tabPeople, profile: tabProfile, saved: tabSaved }[S.set.bottomTab] || tabCredit;
     const d = cur.detail || {};
     try { body.innerHTML = fn(d, cur); } catch (e) { console.error(e); body.innerHTML = `<p class="muted pad">表示できませんでした: ${esc(e.message)}</p>`; }
     $$("[data-method]", body).forEach((b) => b.addEventListener("click", () => { S.set.creditMethod = b.dataset.method; saveSettings(); computeEst(cur); renderChart(true); renderSymCard(); renderBottom(); }));
@@ -986,6 +996,10 @@
     $$("[data-load-universe]", body).forEach((b) => b.addEventListener("click", loadUniverse));
     $$("[data-expby]", body).forEach((b) => b.addEventListener("click", () => { S.expBy = b.dataset.expby; renderBottom(); }));
     $$("[data-progkey]", body).forEach((b) => b.addEventListener("click", () => { S.progKey = b.dataset.progkey; renderBottom(); }));
+    $$("[data-trade-add]", body).forEach((b) => b.addEventListener("click", () => openTradeModal()));
+    $$("[data-trade-edit]", body).forEach((b) => b.addEventListener("click", () => openTradeModal(S.trades.find((t) => t.id === b.dataset.tradeEdit))));
+    $$("[data-trade-csv]", body).forEach((inp) => inp.addEventListener("change", () => { if (inp.files[0]) importTradesCsv(inp.files[0]); }));
+    $$("[data-trade-export]", body).forEach((b) => b.addEventListener("click", () => download("stockrank_trades.csv", SRTrades.toCsv(S.trades))));
     mountMini();
   }
   // 下段の小さなチャート(タブを描き直すたびに作り直す)
@@ -1384,6 +1398,64 @@
     const bb = x.buyback || [];
     if (bb.length) parts.push(`<div class="row-head"><h3>自己株券買付状況報告書</h3><small>EDINET。自社株買いの枠がある間、毎月の買付の実績を報告する</small></div><div class="table-wrap"><table class="grid left"><thead><tr><th>提出日</th><th>書類</th></tr></thead><tbody>${bb.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => `<tr><th>${esc(r.date)}</th><td>${r.docID ? `<a href="${EDINET_DOC(r.docID)}" target="_blank" rel="noopener">${esc(r.desc || r.docID)}</a>` : esc(r.desc || "")}</td></tr>`).join("")}</tbody></table></div>`);
     return (parts.join("") || empty("この銘柄の機関の需給データはありません(空売り残高の報告・大量保有の提出などが無い)。")) + `<p class="foot">取得: ${esc(String(x.updatedAt || "").slice(0, 16).replace("T", " "))}。出典: JPX(空売り残高情報)・日本証券金融(貸借取引残高・品貸料)・EDINET。</p>`;
+  }
+
+  // ---------- 自分の売買の記録 ----------
+  const tradesFor = (code) => S.trades.filter((t) => t.code === code);
+  function tradeData() {
+    if (!S.cur || S.cur.isIndex) return null;
+    const list = tradesFor(S.code); if (!list.length) return null;
+    const key = `${S.code}|${S.tradesVer || 0}`;
+    if (tradeData.key !== key) { tradeData.key = key; tradeData.val = { trades: list, pairs: SRTrades.match(list).pairs }; }
+    return tradeData.val;
+  }
+  function saveTrades() { SRTrades.save(S.trades); S.tradesVer = (S.tradesVer || 0) + 1; if (chart && S.cur) { renderLegend(null); tradeLayer?.update(); } if (["trades"].includes(S.set.bottomTab)) renderBottom(); }
+  let tradeEditing = null;
+  function openTradeModal(init = {}) {
+    if (!S.cur || S.cur.isIndex) { toast("売買は個別銘柄のチャートで記録します"); return; }
+    tradeEditing = init.id ? init : null;
+    const f = $("#tradeForm"); const last = S.cur.daily.at(-1);
+    f.date.value = init.date || last?.d || ""; f.price.value = init.price !== undefined && init.price !== null ? Number(init.price).toFixed(Math.abs(init.price) >= 1000 ? 0 : 1) : (last?.c ?? "");
+    f.qty.value = init.qty || 100; f.note.value = init.note || "";
+    $$("input[name=side]", f).forEach((r) => { r.checked = r.value === (init.side || "buy"); });
+    $("#tradeModalTitle").textContent = tradeEditing ? `売買の記録を直す(${S.code})` : `売買を記録(${S.code} ${S.cur.row?.name || ""})`;
+    $("#tradeForm .trade-actions").innerHTML = `${tradeEditing ? '<button type="button" class="btn danger" data-trade-del>この記録を消す</button>' : ""}<button type="button" class="btn" data-close>やめる</button><button type="submit" class="btn primary">${tradeEditing ? "保存" : "記録する"}</button>`;
+    $("#tradeModal").hidden = false; f.price.focus();
+  }
+  function bindTrades() {
+    const f = $("#tradeForm");
+    f.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const side = $("input[name=side]:checked", f).value; const price = Number(f.price.value), qty = Number(f.qty.value);
+      if (!f.date.value || !(price > 0) || !(qty > 0)) return;
+      const rec = { id: tradeEditing?.id || SRTrades.newId(), code: S.code, date: f.date.value, side, price, qty, note: f.note.value.trim(), seq: Date.now() };
+      S.trades = [...S.trades.filter((t) => t.id !== rec.id), rec]; saveTrades(); closeModals();
+    });
+    f.addEventListener("click", (e) => { if (e.target.closest("[data-trade-del]") && tradeEditing) { S.trades = S.trades.filter((t) => t.id !== tradeEditing.id); saveTrades(); closeModals(); } });
+  }
+  function importTradesCsv(file) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // 証券会社の CSV は Shift_JIS が多い。UTF-8 として読めなければ Shift_JIS で読み直す
+      const buf = reader.result; let text = new TextDecoder("utf-8").decode(buf);
+      if (text.includes("�")) try { text = new TextDecoder("shift_jis").decode(buf); } catch { /* */ }
+      try { const add = SRTrades.parseCsv(text); const m = SRTrades.mergeTrades(S.trades, add); S.trades = m.list; saveTrades(); toast(`${add.length}件を読み込み、新しい ${m.added}件を追加しました`); renderBottom(); }
+      catch (err) { toast(`読み込めませんでした: ${err.message}`); }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+  function tabTrades(d, cur) {
+    const list = tradesFor(cur.code); const m = SRTrades.match(list); const price = cur.daily.at(-1)?.c;
+    const unreal = m.open.reduce((s, l) => s + (price - l.price) * l.left * l.dir, 0);
+    const card = (label, v, sub, c = "") => `<article><span>${label}</span><strong class="${c}">${v}</strong><em>${sub}</em></article>`;
+    const cards = list.length ? `<div class="cards">${card("保有", `${m.position >= 0 ? "" : "売り "}${fmt(Math.abs(m.position))}<small>株</small>`, m.avgPrice ? `平均単価 ${fmtPrice(m.avgPrice)}円` : "建玉なし")}${card("含み損益(現在値)", m.open.length ? `${unreal >= 0 ? "+" : ""}${fmt(unreal)}<small>円</small>` : "—", price ? `現在値 ${fmtPrice(price)}円` : "", cls(unreal))}${card("確定した損益", `${m.realized >= 0 ? "+" : ""}${fmt(m.realized)}<small>円</small>`, `${m.closed}回 · 勝ち ${m.wins}回${m.closed ? `(${Math.round(m.wins / m.closed * 100)}%)` : ""}`, cls(m.realized))}</div>` : "";
+    const rows = SRTrades.sortTrades(list).reverse().map((t) => `<tr><th>${esc(t.date)}</th><td><b style="color:${t.side === "buy" ? "#e53935" : "#1e88e5"}">${t.side === "buy" ? "買" : "売"}</b></td><td>${fmtPrice(t.price)}</td><td>${fmt(t.qty)}</td><td>${fmt(t.price * t.qty)}</td><td class="left">${esc(t.note || "")}</td><td><button type="button" class="link" data-trade-edit="${esc(t.id)}">直す</button></td></tr>`).join("");
+    const pairs = m.pairs.slice().reverse().map((p) => `<tr><th>${esc(p.open.date)} → ${esc(p.close.date)}</th><td>${p.dir > 0 ? "買い → 売り" : "売り → 買い戻し"}</td><td>${fmtPrice(p.open.price)} → ${fmtPrice(p.close.price)}</td><td>${fmt(p.qty)}</td><td class="${cls(p.pnl)}">${p.pnl >= 0 ? "+" : ""}${fmt(p.pnl)}</td><td>${pctCell(p.pnlPct)}</td><td>${Math.round((Date.parse(p.close.date) - Date.parse(p.open.date)) / 864e5)}日</td></tr>`).join("");
+    return `<div class="row-head"><h3>自分の売買の記録(${esc(cur.code)})</h3><button type="button" class="btn primary" data-trade-add>＋ 売買を記録</button><label class="btn">CSV を読み込む<input type="file" accept=".csv,.txt" data-trade-csv hidden></label><button type="button" class="btn" data-trade-export>全銘柄の記録を CSV で保存</button></div>
+      ${cards}
+      ${list.length ? `<div class="table-wrap"><table class="grid"><thead><tr><th>約定日</th><th>売買</th><th>単価</th><th>株数</th><th>金額</th><th>メモ</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<div class="empty">この銘柄の売買の記録はまだありません。<br><small>左の描画ツールの「売買を記録」(赤と青の点)を選んでチャートの約定した足をクリックするか、上のボタン・証券会社の約定履歴 CSV(SBI・楽天など)から追加します。チャートには買い=赤・売り=青の点が付き、対応する売買が薄い線で結ばれます。</small></div>`}
+      ${pairs ? `<div class="row-head"><h3>対応する売買(先入れ先出し)</h3><small>チャートの薄い線の組み合わせ。一部だけ売ったときは株数で分けています</small></div><div class="table-wrap"><table class="grid"><thead><tr><th>期間</th><th>種類</th><th>単価</th><th>株数</th><th>損益(円)</th><th>損益率</th><th>日数</th></tr></thead><tbody>${pairs}</tbody></table></div>` : ""}
+      <p class="foot">記録はこの端末のブラウザだけに保存します(GitHub やほかの人には送られません)。ブラウザのデータを消すと消えるので、ときどき「CSV で保存」してください。手数料・税金は含めていません。</p>`;
   }
 
   // 株探の通期(百万円)に、株探に無い古い期を IRBANK(円)で補う(Future Sight と同じ)
