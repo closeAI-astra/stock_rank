@@ -499,6 +499,195 @@ def run_jpx_market(f: Fetcher, store: Store, index: dict) -> dict:
     return {"status": "ok", **res}
 
 
+# ---------- JPX: 投資部門別 株式売買状況(週次の Excel。一覧には直近約5週分) ----------
+JPX_INVESTOR_PAGE = JPX + "/markets/statistics-equities/investor-type/index.html"
+
+
+def _ja(label) -> str:
+    """「海外投資家 Foreigners」→「海外投資家」"""
+    s = str(label or "").replace("\n", " ").strip()
+    return re.split(r"\s+[A-Za-z]", s)[0].strip() if s else ""
+
+
+def parse_investor(rows: list[list], week_end: str) -> dict | None:
+    """週の投資部門別売買(二市場 = 東証 + 名証)の金額。各部門の 売り・買い・差引(億円)。"""
+    h = next((i for i, r in enumerate(rows[:30]) if "年月週" in str(r[0] if r else "")), None)
+    if h is None or h < 4:
+        return None
+    width = max(len(r) for r in rows[h - 4:h + 1])
+    def ffill(r):
+        out, cur = [], ""
+        for i in range(width):
+            v = r[i] if i < len(r) else None
+            if v not in (None, "") and str(v).strip():
+                cur = str(v)
+            out.append(cur)
+        return out
+    # 見出しは4段: 自己/委託 → 部門(個人・海外投資家・法人…)→ 内訳 → 内訳の内訳(法人の金融機関など)
+    top_kind, top, mid, sub = ffill(rows[h - 4]), ffill(rows[h - 3]), ffill(rows[h - 2]), ffill(rows[h - 1])
+    # 二市場の金額の行
+    target = None
+    for i in range(h + 1, len(rows)):
+        r = rows[i]
+        if any("二市場" in str(c or "") for c in r[:3]):
+            for j in range(i, min(i + 3, len(rows))):
+                if "金額" in str(rows[j][2] if len(rows[j]) > 2 else ""):
+                    target = rows[j]
+                    break
+            break
+    if not target:
+        return None
+    groups = []
+    for start in range(3, width - 2, 4):
+        sell, buy, net = (num(target[start + k]) if start + k < len(target) else None for k in range(3))
+        if sell is None and buy is None:
+            continue
+        groups.append({"kind": _ja(top_kind[start]), "top": _ja(top[start]), "mid": _ja(mid[start]), "sub": _ja(sub[start]), "sell": None if sell is None else round(sell / 1e5, 2),
+                       "buy": None if buy is None else round(buy / 1e5, 2), "net": None if net is None else round(net / 1e5, 2)})
+    if not groups:
+        return None
+    # 部門ごとの差引。法人は内訳に小計が混ざることがあるので足さず、内訳(投資信託・事業法人・信託銀行…)を別に持つ
+    totals, subs = {}, {}
+    for g in groups:
+        if g["net"] is None or not g["top"]:
+            continue
+        if g["top"] == "法人":
+            subs.setdefault(g["sub"] or g["mid"], g["net"])
+        elif g["top"] not in ("合計", "総計", "委託計"):
+            totals[g["top"]] = round(totals.get(g["top"], 0) + g["net"], 2)
+            if g["top"] == "個人" and g["sub"]:
+                subs.setdefault(f"個人({g['sub'].replace('取引', '')})", g["net"])
+    return {"weekEnd": week_end, "unit": "億円", "groups": groups, "totals": totals, "subs": subs}
+
+
+def run_jpx_investor(f: Fetcher, store: Store, index: dict) -> dict:
+    market = store.load("market", {})
+    done = set(index.get("jpxInvestorFiles", []))
+    files = [u for u, _ in page_files(f, JPX_INVESTOR_PAGE, r"stock_1_w_\d{8}_\d{8}\.xlsx?$")]
+    weeks = market.get("investor", [])
+    for u in sorted(x for x in files if x not in done):
+        m = re.search(r"_(\d{4})(\d{2})(\d{2})\.xlsx?$", u)
+        raw = fetch_bytes(f, u)
+        if raw is None or not m:
+            continue
+        try:
+            row = parse_investor(read_table(raw, u), f"{m.group(1)}-{m.group(2)}-{m.group(3)}")
+        except Exception as e:  # noqa: BLE001
+            print(f"  {u}: 読めませんでした {e}")
+            continue
+        if row:
+            weeks = merge_rows(weeks, [row], lambda r: r["weekEnd"])
+            print(f"  {u.rsplit('/', 1)[-1]}: " + ", ".join(f"{k} {v:+.0f}" for k, v in row["totals"].items()))
+        else:
+            print(f"  {u.rsplit('/', 1)[-1]}: 読み取れませんでした")
+        done.add(u)
+    market["investor"] = sorted(weeks, key=lambda r: r["weekEnd"])
+    index["jpxInvestorFiles"] = sorted(done)[-600:]
+    return {"status": "ok", "weeks": len(market["investor"])}
+
+
+# ---------- JPX: 信用取引現在高(東証・名証の全体。過去推移表は 2002 年から週次、04.html は直近の週) ----------
+JPX_MARGIN_NOW_PAGE = JPX + "/markets/statistics-equities/margin/04.html"
+JPX_MARGIN_HIST_PAGE = JPX + "/markets/statistics-equities/margin/05.html"
+
+
+def _margin_row(date: str, sell, buy, sell_amt=None, buy_amt=None, **extra) -> dict:
+    k = lambda v, m: None if v is None else round(v * m)  # noqa: E731
+    row = {"date": date, "sell": k(sell, 1000), "buy": k(buy, 1000), "sellAmount": k(sell_amt, 1e6), "buyAmount": k(buy_amt, 1e6)}
+    row.update({key: k(v, 1000 if key.endswith("Shares") else 1e6) for key, v in extra.items()})
+    row["ratio"] = round(row["buy"] / row["sell"], 4) if row["buy"] and row["sell"] else None
+    return row
+
+
+def parse_margin_history(rows: list[list]) -> list[dict]:
+    """信用取引現在高(一般信用取引・制度信用取引別)の過去推移。[東京・名古屋] の段の週ごとの行(千株・百万円)。"""
+    out, on = [], False
+    for r in rows:
+        first = str(r[0] if r else "")
+        if first.startswith("["):
+            on = "東京・名古屋" in first or "Tokyo & Nagoya" in first
+            continue
+        date = iso(r[0]) if on and r else None
+        if not date:
+            continue
+        v = [num(c) for c in r[1:13]] + [None] * 12
+        if v[0] is None and v[2] is None:
+            continue
+        out.append(_margin_row(date, v[0], v[2], v[1], v[3], sellNegShares=v[4], sellStdShares=v[6], buyNegShares=v[8], buyStdShares=v[10],
+                               buyNegAmount=v[9], buyStdAmount=v[11]))
+    return out
+
+
+def parse_margin_current(rows: list[list]) -> dict | None:
+    """週の信用取引現在高(二市場)。制度(自己・委託)・一般(委託)の株数と金額、合計の株数。"""
+    date = None
+    for r in rows[:4]:
+        for c in r:
+            if iso(c):
+                date = iso(c)
+                break
+        if date:
+            break
+    if not date:
+        return None
+    section = ""
+    sh = {"buy": 0.0, "sell": 0.0}; amt = {"buy": 0.0, "sell": 0.0}; std_buy = neg_buy = 0.0
+    total = None
+    for r in rows:
+        cells = [str(c or "") for c in r]
+        if len(cells) < 8:
+            continue
+        if cells[1].strip():
+            section = cells[1]
+        kind = cells[3] or cells[2]
+        sell, buy = num(r[4]), num(r[6])
+        if sell is None and buy is None:
+            continue
+        if "合計" in section and "株数" in kind:
+            total = (sell, buy)
+        elif "株数" in kind:
+            sh["sell"] += sell or 0; sh["buy"] += buy or 0
+            if "制度" in section:
+                std_buy += buy or 0
+            elif "一般" in section:
+                neg_buy += buy or 0
+        elif "金額" in kind:
+            amt["sell"] += sell or 0; amt["buy"] += buy or 0
+    if not total and not sh["buy"]:
+        return None
+    sell, buy = total if total else (sh["sell"], sh["buy"])
+    return _margin_row(date, sell, buy, amt["sell"] or None, amt["buy"] or None, buyStdShares=std_buy or None, buyNegShares=neg_buy or None)
+
+
+def run_jpx_margin(f: Fetcher, store: Store, index: dict) -> dict:
+    market = store.load("market", {})
+    rows = market.get("margin", [])
+    done = set(index.get("jpxMarginFiles", []))
+    for page, pat, parser in ((JPX_MARGIN_HIST_PAGE, r"_mtgk\.xlsx?$", parse_margin_history), (JPX_MARGIN_NOW_PAGE, r"_mtcurrent\.xlsx?$", parse_margin_current)):
+        for u in sorted(x for x, _ in page_files(f, page, pat) if x not in done):
+            raw = fetch_bytes(f, u)
+            if raw is None:
+                continue
+            try:
+                got = parser(read_table(raw, u))
+            except Exception as e:  # noqa: BLE001
+                print(f"  {u}: 読めませんでした {e}")
+                continue
+            got = got if isinstance(got, list) else ([got] if got else [])
+            # 週次の速報(mtcurrent)は過去推移表より新しいので後から重ねる。同じ日は値のある項目だけ上書き
+            by = {r["date"]: r for r in rows}
+            for r in got:
+                old = by.get(r["date"], {})
+                by[r["date"]] = {**old, **{k: v for k, v in r.items() if v is not None}}
+            rows = sorted(by.values(), key=lambda r: r["date"])
+            print(f"  {u.rsplit('/', 1)[-1]}: {len(got)}週" + (f"({got[0]['date']}〜{got[-1]['date']})" if got else ""))
+            done.add(u)
+    market["margin"] = rows
+    market["marginSource"] = "JPX 信用取引現在高(東京・名古屋)"
+    index["jpxMarginFiles"] = sorted(done)[-400:]
+    return {"status": "ok", "weeks": len(rows)}
+
+
 # ---------- 日証金: 貸借取引残高・品貸料・制限措置(その日の CSV。毎日取って積み増す) ----------
 JSF = "https://www.taisyaku.jp"
 
@@ -645,6 +834,10 @@ def main() -> int:
         res["jpxShort"] = run_jpx_short(f, store, index, universe)
         print("\n== JPX 市場(空売り比率・裁定取引)")
         res["jpxMarket"] = run_jpx_market(f, store, index)
+        print("\n== JPX 信用取引現在高(市場全体)")
+        res["jpxMargin"] = run_jpx_margin(f, store, index)
+        print("\n== JPX 投資部門別売買")
+        res["jpxInvestor"] = run_jpx_investor(f, store, index)
     if not only or "jsf" in only:
         print("\n== 日証金")
         res["jsf"] = run_jsf(Fetcher(opts.delay, JSF), store, index, universe)

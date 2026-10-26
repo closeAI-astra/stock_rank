@@ -70,3 +70,52 @@ class InstTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JpxMarketTest(unittest.TestCase):
+    def test_investor(self):
+        E = None
+        hdr = lambda cells: [E, E, E] + cells  # noqa: E731
+        g = lambda name: [name, E, E, E]  # noqa: E731
+        rows = [["投資部門別 株式売買状況 Stocks by Investor Type"], [],
+                hdr(g("自己 Proprietary") * 0 + ["自己 Proprietary", E, E, E, E, E, E, E] + ["委託 Brokerage"] + [E] * 23),
+                hdr(["自己 Proprietary"] + [E] * 7 + ["個人 Individuals"] + [E] * 7 + ["海外投資家 Foreigners "] + [E] * 7 + ["証券会社 Securities Cos."] + [E] * 3 + ["法人 Institutions"] + [E] * 3),
+                hdr(g("現金取引 Cash") + g("信用取引 Margin") + g("現金取引 Cash") + g("信用取引 Margin") + g("法人 Institutions") + g("個人 Individuals") + g("証券会社 Securities Cos.") + g("投資信託 Investment Trusts")),
+                hdr(g("現金取引 Cash") + g("信用取引 Margin") + g("現金取引 Cash") + g("信用取引 Margin") + g("法人 Institutions") + g("個人 Individuals") + g("証券会社 Securities Cos.") + g("投資信託 Investment Trusts")),
+                ["年月週 Year, Month, Week", "市場／Market", "株数／金額"] + ["売 Sales", "買 Purchases", "差引 Balance", "合計 Total"] * 8,
+                ["2026102", "二市場\nTokyo & Nagoya Markets", "株数 Shares"] + [1] * 32,
+                [E, E, "金額 Value"] + [100e5, 150e5, 50e5, 250e5, 10e5, 0, -10e5, 10e5, 200e5, 100e5, -100e5, 300e5, 50e5, 80e5, 30e5, 130e5,
+                                         300e5, 500e5, 200e5, 800e5, 5e5, 2e5, -3e5, 7e5, 9e5, 9e5, 0, 18e5, 40e5, 60e5, 20e5, 100e5]]
+        r = I.parse_investor(rows, "2026-10-16")
+        self.assertEqual(r["totals"]["自己"], 40.0)
+        self.assertEqual(r["totals"]["個人"], -70.0)
+        self.assertEqual(r["totals"]["海外投資家"], 197.0)
+        self.assertEqual(r["subs"]["投資信託"], 20.0)
+        self.assertEqual(r["subs"]["個人(信用)"], 30.0)
+
+    def test_margin_history(self):
+        rows = [["信用取引現在高（一般信用取引・制度信用取引別）"], [], [],
+                ["[東京・名古屋 Tokyo & Nagoya]"],
+                [dt.datetime(2002, 8, 2), 1254269, 1004839, 2615658, 1570284, 115172, 91766, 1139097, 913073, 362, 133, 2615296, 1570151],
+                ["[東京 Tokyo]"],
+                [dt.datetime(2002, 8, 2), 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]]
+        out = I.parse_margin_history(rows)
+        self.assertEqual(len(out), 1)
+        self.assertEqual((out[0]["date"], out[0]["sell"], out[0]["buy"]), ("2002-08-02", 1254269000, 2615658000))
+        self.assertEqual(out[0]["buyAmount"], 1570284 * 10 ** 6); self.assertEqual(out[0]["buyStdShares"], 2615296000)
+
+    def test_margin_current(self):
+        E = None
+        rows = [[E, E, dt.datetime(2026, 10, 9)], [E, E, dt.datetime(2026, 10, 9), dt.datetime(2026, 10, 9)], [E, E, dt.datetime(2026, 10, 14)],
+                [E, E, E, E, "二市場 Tokyo&Nagoya"],
+                [E, "制度信用取引残高", "自己", "株数Shs.", 76217, -3701, 1590, 495, 76216, -3701, 1590, 495],
+                [E, E, E, "金額Val.", 101813, -4716, 2164, 411, 0, 0, 0, 0],
+                [E, E, "委託", "株数Shs.", 207494, 10413, 1819931, 36991, 0, 0, 0, 0],
+                [E, E, E, "金額Val.", 447137, -4092, 3671626, 116298, 0, 0, 0, 0],
+                [E, "一般信用取引残高", "委託", "株数Shs.", 83193, 5805, 2009099, 27562, 0, 0, 0, 0],
+                [E, E, E, "金額Val.", 213102, 20134, 3034267, 67796, 0, 0, 0, 0],
+                [E, "信用取引残高合計", E, "株数Shs.", 366905, 12518, 3830621, 65049, 0, 0, 0, 0]]
+        r = I.parse_margin_current(rows)
+        self.assertEqual((r["date"], r["sell"], r["buy"]), ("2026-10-09", 366905000, 3830621000))
+        self.assertEqual(r["buyAmount"], (2164 + 3671626 + 3034267) * 10 ** 6)
+        self.assertEqual(r["buyStdShares"], (1590 + 1819931) * 1000); self.assertEqual(r["buyNegShares"], 2009099 * 1000)

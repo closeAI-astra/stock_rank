@@ -1031,16 +1031,55 @@
     const agg = cur.creditAgg || [];
     const last = agg.at(-1);
     const cards = last ? `<div class="cards"><article><span>買残(対象銘柄合計)</span><strong>${fmt(last.buy)}<small>株</small></strong><em>${esc(last.date)} · 4週 ${pct(SRCredit.changeOver(agg, "buy", 4))}</em></article><article><span>売残(対象銘柄合計)</span><strong>${fmt(last.sell)}<small>株</small></strong><em>4週 ${pct(SRCredit.changeOver(agg, "sell", 4))}</em></article><article><span>信用倍率(対象銘柄合計)</span><strong>${fmt(last.ratio, 2)}<small>倍</small></strong><em>${esc(String(last.n || ""))}銘柄</em></article></div>` : "";
-    return `${cards}${whole.length ? creditTable(whole, "東証全体の信用残(株探・IRBANK 保存)", "取得元のページの表から取り出した値。単位は取得元のまま") : `<div class="empty">東証全体の信用残はまだ保存されていません。<br><small>「Kabutan weekly」「IRBANK archive」が、トップページの「信用残」などのリンクから市場全体のページを探して保存します。</small></div>`}
+    return `${cards}${jpxMarginSection()}${whole.length && !S.instMarket?.margin?.length ? creditTable(whole, "東証全体の信用残(株探・IRBANK 保存)", "取得元のページの表から取り出した値。単位は取得元のまま") : `<div class="empty">東証全体の信用残はまだ保存されていません。<br><small>「Kabutan weekly」「IRBANK archive」が、トップページの「信用残」などのリンクから市場全体のページを探して保存します。</small></div>`}
       ${creditTable(agg, "stockAI 対象銘柄(約400)の信用残の合計", `〜2026-09 は週次、2026-09-25 申込分からは JPX の日次。東証全体ではない。${Object.entries(CREDIT_ERRATA).map(([d, t]) => `${d} は ${t}`).join(" / ")}`)}
       <p class="foot">チャートの「信用残」「信用倍率」サブチャートは、${esc(cur.creditLabel || "")}の値です。指数の値 × 株数 は金額にならないため、指数では金額・評価損益率は出しません(対象銘柄合計の推定評価損益率は「ランキング・信用」ページ)。</p>`;
   }
+  // JPX の信用取引現在高(東京・名古屋の全体。2002 年から週次)
+  function jpxMarginSection() {
+    const rows = (S.instMarket?.margin || []).filter((r) => num(r.buy) !== null);
+    if (!rows.length) return "";
+    const l = rows.at(-1); const wk = (k, w) => SRCredit.changeOver(rows, k, w);
+    const negShare = num(l.buyNegShares) !== null && l.buy ? l.buyNegShares / l.buy : null;
+    const cards = `<div class="cards"><article><span>東証全体 買残(金額)</span><strong>${oku(l.buyAmount)}<small>円</small></strong><em>${esc(l.date)} 申込分 · ${fmt(l.buy / 1e6, 0)}百万株 · 4週 ${pct(wk("buyAmount", 4))}</em></article>
+      <article><span>東証全体 売残(金額)</span><strong>${oku(l.sellAmount)}<small>円</small></strong><em>${fmt(l.sell / 1e6, 0)}百万株 · 4週 ${pct(wk("sellAmount", 4))}</em></article>
+      <article><span>信用倍率(株数 / 金額)</span><strong>${fmt(l.ratio, 2)}<small>倍</small></strong><em>金額ベース ${l.sellAmount ? (l.buyAmount / l.sellAmount).toFixed(2) : "—"}倍</em></article>
+      <article><span>買残のうち一般信用</span><strong>${negShare === null ? "—" : `${(negShare * 100).toFixed(1)}<small>%</small>`}</strong><em>一般信用は期日が無い(長く持たれやすい)</em></article></div>`;
+    const chart = mini("miniJpxMargin", 220, (c) => {
+      const okuF = { type: "custom", formatter: (v) => `${(v / 1e12).toFixed(2)}兆`, minMove: 1e9 };
+      const b = c.addSeries(LW.LineSeries, { color: css("--credit-buy"), lineWidth: 2, title: "買残金額", priceFormat: okuF }); b.setData(rows.filter((r) => num(r.buyAmount) !== null).map((r) => ({ time: r.date, value: r.buyAmount })));
+      const s2 = c.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, title: "売残金額", priceFormat: okuF }); s2.setData(rows.filter((r) => num(r.sellAmount) !== null).map((r) => ({ time: r.date, value: r.sellAmount })));
+      const r2 = c.addSeries(LW.LineSeries, { color: "#ffb300", lineWidth: 1, priceScaleId: "left", title: "信用倍率", priceFormat: { type: "price", precision: 2, minMove: 0.01 } }); r2.setData(rows.filter((r) => num(r.ratio) !== null).map((r) => ({ time: r.date, value: r.ratio })));
+      c.applyOptions({ leftPriceScale: { visible: true } });
+    });
+    let prev = null;
+    const list = rows.map((r) => { const o = { ...r, bc: prev && prev.buyAmount ? r.buyAmount - prev.buyAmount : null, sc: prev && prev.sellAmount ? r.sellAmount - prev.sellAmount : null }; prev = r; return o; });
+    const table = `<div class="table-wrap tall"><table class="grid"><thead><tr><th>申込日</th><th>売残(株)</th><th>売残金額</th><th>前週比</th><th>買残(株)</th><th>買残金額</th><th>前週比</th><th>信用倍率</th><th>買残 制度</th><th>買残 一般</th></tr></thead><tbody>${list.slice().reverse().slice(0, 260).map((r) => `<tr><th>${esc(r.date)}</th><td>${fmt(r.sell)}</td><td>${oku(r.sellAmount)}</td><td class="${cls(r.sc)}">${r.sc === null ? "—" : oku(r.sc)}</td><td>${fmt(r.buy)}</td><td>${oku(r.buyAmount)}</td><td class="${cls(r.bc)}">${r.bc === null ? "—" : oku(r.bc)}</td><td>${fmt(r.ratio, 2)}</td><td>${fmt(r.buyStdShares)}</td><td>${fmt(r.buyNegShares)}</td></tr>`).join("")}</tbody></table></div>`;
+    return `<div class="row-head"><h3>東証全体の信用取引残高(JPX)</h3><small>東京・名古屋の合計 · ${rows.length}週(${esc(rows[0].date)}〜)· 指数のチャートの信用残サブチャートもこの値</small></div>${cards}${chart}${table}`;
+  }
   const FLOW_LABELS = { foreigners: "海外投資家", individuals: "個人", individuals_cash: "個人(現金)", individuals_margin: "個人(信用)", proprietary: "自己(証券会社)", trust_banks: "信託銀行", investment_trusts: "投資信託", business_cos: "事業法人", life_nonlife: "生保・損保", city_regional_banks: "都銀・地銀", total: "合計" };
+  // JPX から積み増した投資部門別売買(二市場の金額・億円)
+  function jpxFlowsSection() {
+    const weeks = (S.instMarket?.investor || []).filter((w) => w.totals); if (!weeks.length) return "";
+    const tops = ["海外投資家", "個人", "自己", "証券会社"].filter((k) => weeks.some((w) => w.totals[k] !== undefined));
+    const subs = ["個人(現金)", "個人(信用)", "投資信託", "事業法人", "信託銀行", "生保・損保", "都銀・地銀等", "その他法人等", "その他金融機関"].filter((k) => weeks.some((w) => w.subs?.[k] !== undefined));
+    const v = (x) => (num(x) === null ? "—" : `${x >= 0 ? "+" : ""}${fmt(x, 0)}`);
+    let cumF = 0, cumI = 0; const cum = weeks.map((w) => { cumF += w.totals["海外投資家"] || 0; cumI += w.totals["個人"] || 0; return { time: w.weekEnd, f: cumF, i: cumI }; });
+    const chart = weeks.length > 2 ? mini("miniFlows", 200, (c) => {
+      const pf = { type: "custom", formatter: (x) => `${Math.round(x).toLocaleString("ja-JP")}億`, minMove: 1 };
+      const a = c.addSeries(LW.LineSeries, { color: "#2962ff", lineWidth: 2, title: "海外投資家(累積)", priceFormat: pf }); a.setData(cum.map((x) => ({ time: x.time, value: x.f })));
+      const b = c.addSeries(LW.LineSeries, { color: "#ff9800", lineWidth: 2, title: "個人(累積)", priceFormat: pf }); b.setData(cum.map((x) => ({ time: x.time, value: x.i })));
+      a.createPriceLine({ price: 0, color: css("--tv-grid2"), lineWidth: 1, axisLabelVisible: false });
+    }) : "";
+    return `<div class="row-head"><h3>投資部門別 売買の差引(JPX・二市場・億円)</h3><small>${weeks.length}週(${esc(weeks[0].weekEnd)}〜)。毎週の公表を積み増しています</small></div>${chart}
+      <div class="table-wrap tall"><table class="grid"><thead><tr><th>週</th>${tops.map((k) => `<th>${esc(k)}</th>`).join("")}${subs.map((k) => `<th>${esc(k)}</th>`).join("")}</tr></thead><tbody>${weeks.slice().reverse().map((w) => `<tr><th>${esc(w.weekEnd)}</th>${tops.map((k) => `<td class="${cls(w.totals[k])}">${v(w.totals[k])}</td>`).join("")}${subs.map((k) => `<td class="${cls(w.subs?.[k])}">${v(w.subs?.[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  }
   function tabFlows() {
     const f = S.market?.flows; const weeks = f?.weeks || [];
-    if (!weeks.length) return empty("投資部門別売買のデータはありません。");
+    const jpx = jpxFlowsSection();
+    if (!weeks.length) return jpx || empty("投資部門別売買のデータはありません。");
     const keys = Object.keys(FLOW_LABELS).filter((k) => weeks.some((w) => w[k] !== undefined));
-    return `<div class="row-head"><h3>投資部門別 株式売買状況(差引き = 買い − 売り)</h3><small>${esc(f.unit || "")} · ${esc(f.source || "")}</small></div><div class="table-wrap"><table class="grid"><thead><tr><th>週</th>${keys.map((k) => `<th>${FLOW_LABELS[k]}</th>`).join("")}<th>売買代金</th><th>公表</th></tr></thead><tbody>${weeks.slice().reverse().map((w) => `<tr><th>${esc(w.weekEnd)}</th>${keys.map((k) => `<td class="${cls(w[k])}">${num(w[k]) === null ? "—" : `${w[k] >= 0 ? "+" : ""}${fmt(w[k], 0)}`}</td>`).join("")}<td>${fmt(w.totalValue)}</td><td><small>${esc(w.availableFrom || "")}</small></td></tr>`).join("")}</tbody></table></div>`;
+    return `<div class="row-head"><h3>投資部門別 株式売買状況(差引き = 買い − 売り)</h3><small>${esc(f.unit || "")} · ${esc(f.source || "")}</small></div><div class="table-wrap"><table class="grid"><thead><tr><th>週</th>${keys.map((k) => `<th>${FLOW_LABELS[k]}</th>`).join("")}<th>売買代金</th><th>公表</th></tr></thead><tbody>${weeks.slice().reverse().map((w) => `<tr><th>${esc(w.weekEnd)}</th>${keys.map((k) => `<td class="${cls(w[k])}">${num(w[k]) === null ? "—" : `${w[k] >= 0 ? "+" : ""}${fmt(w[k], 0)}`}</td>`).join("")}<td>${fmt(w.totalValue)}</td><td><small>${esc(w.availableFrom || "")}</small></td></tr>`).join("")}</tbody></table></div>${jpx}`;
   }
   function tabBreadth() {
     const b = S.market?.breadth; const secs = (S.market?.sectors || []).slice().sort((x, y) => (num(y.chg20d) ?? -9) - (num(x.chg20d) ?? -9));
