@@ -238,6 +238,10 @@ def extract_margin(tables: list[dict], year_hint: int) -> list[dict]:
     """信用残の表(見出しに 売残/買残 を含む)を [{date, sell, buy, ratio, ...}] に正規化する。"""
     out: dict[str, dict] = {}
     for t in tables:
+        # ページ送りで取った表(題名に "(y=2023-11-02)" などが付く)は、その年から日付をさかのぼる。
+        # 月日だけの表で毎ページ今年から数えると、古いページの日付が新しい日付に重なって消えてしまう
+        ym = re.search(r"\b(?:y|year)=(\d{4})", t.get("title") or "")
+        hint = int(ym.group(1)) if ym else year_hint
         h = t.get("headers") or []
         if not h and t["rows"]:
             h = t["rows"][0]
@@ -251,7 +255,7 @@ def extract_margin(tables: list[dict], year_hint: int) -> list[dict]:
         ratio = find_col(h, ("倍率",), ())
         date_col = find_col(h, ("日",), ("売", "買", "比", "倍")) or 0
         rows = t["rows"] if t.get("headers") else t["rows"][1:]
-        dates = parse_dates([r[date_col] if date_col < len(r) else "" for r in rows], year_hint)
+        dates = parse_dates([r[date_col] if date_col < len(r) else "" for r in rows], hint)
         for r, d in zip(rows, dates):
             if not d:
                 continue
@@ -333,10 +337,13 @@ class Source:
 
 class IRBank(Source):
     name, label, default_base = "irbank", "IRBANK", "https://irbank.net"
-    PRIORITY = ["margin", "short", "lending", "kashikabu", "zandaka", "shinyo", "holder", "shareholder", "dividend", "results", "value"]
-    labels = {"margin": "信用残", "short": "空売り", "lending": "貸借取引", "holder": "大株主", "dividend": "配当", "results": "決算", "value": "株価指標", "top": "銘柄トップ",
+    PRIORITY = ["zandaka", "margin", "shinyo", "karauri", "short", "taisyaku", "lending", "kashikabu", "gyakuhibu", "holder", "shareholder", "dividend", "results", "value"]
+    # 信用残・空売り・貸借など、ページ送りで過去までさかのぼる価値があるページ(それ以外は数ページだけ)
+    DEEP = {"zandaka", "margin", "shinyo", "karauri", "short", "taisyaku", "lending", "kashikabu", "gyakuhibu"}
+    labels = {"zandaka": "信用残", "karauri": "空売り", "taisyaku": "貸借", "gyakuhibu": "逆日歩", "margin": "信用残", "short": "空売り", "lending": "貸借取引", "holder": "大株主", "dividend": "配当", "results": "決算", "value": "株価指標", "top": "銘柄トップ",
               "pl": "損益計算書", "bs": "貸借対照表", "cf": "キャッシュフロー"}
-    SKIP = {"login", "signup", "logout", "bookmark", "favorite", "rss", "search", "print"}
+    # 個別の開示書類(/7203/140120181113436778 のような数字だけのページ)やイベント・ニュースの一覧は、数が多く表も無いので取らない
+    SKIP = {"login", "signup", "logout", "bookmark", "favorite", "rss", "search", "print", "event", "ir", "news", "chart", "board", "bbs", "tdnet", "pdf"}
 
     def top_url(self, code):
         return f"{self.base}/{code}"
@@ -348,7 +355,7 @@ class IRBank(Source):
             if u.netloc and u.netloc != self.host:
                 continue
             m = re.match(rf"^/{re.escape(code)}/([A-Za-z0-9_\-]+)/?$", u.path)
-            if m and m.group(1) not in self.SKIP and m.group(1) not in names:
+            if m and m.group(1) not in self.SKIP and not m.group(1).isdigit() and m.group(1) not in names:
                 names.append(m.group(1))
         names.sort(key=lambda n: (self.PRIORITY.index(n) if n in self.PRIORITY else len(self.PRIORITY), n))
         pages = [(n, f"{self.base}/{code}/{n}") for n in names]
@@ -461,7 +468,7 @@ class Fetcher:
             self.count += 1
             try:
                 req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "ja,en;q=0.8"})
-                with urllib.request.urlopen(req, timeout=40) as r:
+                with urllib.request.urlopen(req, timeout=25) as r:
                     raw = r.read()
                     charset = r.headers.get_content_charset() or "utf-8"
                     return r.status, raw.decode(charset, errors="replace"), r.geturl()
@@ -471,8 +478,8 @@ class Fetcher:
                     time.sleep(float(retry) if retry and retry.isdigit() else 10 * (attempt + 1))
                     continue
                 return e.code, "", url
-            except Exception as e:  # 通信エラー
-                if attempt < 3:
+            except Exception as e:  # 通信エラー(タイムアウト・名前解決の失敗など)。待ちすぎないよう3回まで
+                if attempt < 2:
                     time.sleep(5 * (attempt + 1))
                     continue
                 print(f"  通信エラー {url}: {e}", flush=True)
@@ -500,7 +507,9 @@ def archive_stock(src: Source, f: Fetcher, code: str, opts, raw: dict[str, bytes
             page["title"], page["tables"] = parsed["title"], parsed["tables"]
             seen = {url, fin}
             bodies = {hash(body)}  # ?p=1 のように最初のページと同じ中身は二重に持たない
-            more = src.follow_links(parsed["links"], fin, seen)[:follow]
+            deep = getattr(src, "DEEP", None)
+            page_follow = follow if deep is None or name in deep else min(follow, 3)
+            more = src.follow_links(parsed["links"], fin, seen)[:page_follow]
             for k, murl in enumerate(more):
                 st2, body2, _ = f.get(murl)
                 if st2 != 200 or hash(body2) in bodies:
@@ -512,7 +521,7 @@ def archive_stock(src: Source, f: Fetcher, code: str, opts, raw: dict[str, bytes
                 for t in p2["tables"]:
                     t["title"] = f"{t['title']} ({mu.query or mu.path.rsplit('/', 1)[-1]})".strip()
                 page["tables"].extend(p2["tables"])
-                more.extend(u for u in src.follow_links(p2["links"], murl, seen) if len(more) < follow)
+                more.extend(u for u in src.follow_links(p2["links"], murl, seen) if len(more) < page_follow)
             page["followed"] = len(more)
             if src.is_margin_page(name) or any("売残" in "".join(t.get("headers") or []) for t in page["tables"]):
                 margin_tables.extend(page["tables"])
@@ -679,9 +688,9 @@ def main() -> int:
                 index["stocks"][code] = {"status": res["status"], "name": names.get(code, ""), "fetchedAt": now_iso(), "pages": {}, "attempts": prev.get("attempts", 0) + (1 if res["status"] == "http_404" else 0)}
         m = res.get("margin") or []
         print(f"[{i + 1}/{len(todo)}] {code} {names.get(code, '')} {res['status']} pages={len(res['pages'])} 信用残(今回)={len(m)}回 {time.time() - t0:.0f}s", flush=True)
-        if (i + 1) % 10 == 0:  # 途中経過も書いておく(強制終了に備える)
-            index["updatedAt"] = now_iso()
-            index_path.write_bytes(encrypt_json(index, key))
+        # 1銘柄ごとに途中経過を書いておく(止めても次はこの続きから)
+        index["updatedAt"] = now_iso()
+        index_path.write_bytes(encrypt_json(index, key))
         # 最初から拒否・失敗が続くときは、相手に同じリクエストを繰り返さずにやめる
         if done == 0 and failed >= 3:
             st = res["status"]

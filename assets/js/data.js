@@ -120,12 +120,37 @@
     const bundle = await fs(`stock-detail/${encodeURIComponent(chunk)}`);
     return bundle?.[code] || null;
   }
+  // 株式分割の前の出来高がさかのぼって調整されていないときに揃える(株価は調整済み)。
+  // 分割の直前と直後それぞれ 10 本の出来高の中央値の比 q が、調整済みなら ≒1、未調整なら ≒1/比率 になる。
+  // はっきり 1/比率 に近いときだけ、分割より前の出来高に比率を掛ける(分割後に本当に出来高が増えた場合を誤って直さないため)
+  function adjustVolume(daily, weekly, splits) {
+    const first = daily[0]?.d || "9999";
+    const all = [...weekly.filter((r) => r.d < first), ...daily];
+    const fixed = [];
+    (splits || []).forEach(([date, ratio]) => {
+      const r = Number(ratio); if (!(r > 0) || Math.abs(Math.log(r)) < 0.1) return;
+      const i = all.findIndex((x) => x.d >= date); if (i < 10 || i + 11 > all.length) return;
+      const med = (xs) => { const a = xs.map((x) => x.v).filter((v) => v > 0).sort((p, q) => p - q); return a.length ? a[Math.floor(a.length / 2)] : null; };
+      // 週足と日足の境目をまたぐと本数の意味が変わるので、同じ種類の足どうしで比べる
+      const sameKind = (x) => (all[i].d >= first) === (x.d >= first);
+      const pre = med(all.slice(i - 10, i).filter(sameKind)), post = med(all.slice(i + 1, i + 11).filter(sameKind));
+      if (!pre || !post) return;
+      const q = pre / post;
+      if (Math.abs(Math.log(q * r)) < Math.abs(Math.log(q)) && Math.abs(Math.log(q * r)) < Math.log(1.6)) {
+        all.forEach((x) => { if (x.d < date && x.v) x.v *= r; });
+        fixed.push({ date, ratio: r, before: q });
+      }
+    });
+    return fixed;
+  }
   // Future Sight と同じ形にほどく: d=[[日付,始,高,安,終,出来高]], w=週足(日足より古い期間), p=予測の履歴, s=分割
   function decodeChart(doc) {
     if (!doc) return { daily: [], weekly: [], splits: [] };
     if (Array.isArray(doc)) return { daily: doc, weekly: [], splits: [] };
     const row = (a) => ({ d: a[0], o: a[1], h: a[2], l: a[3], c: a[4], v: a[5] });
-    return { daily: (doc.d || []).map(row), weekly: (doc.w || []).map(row), splits: Array.isArray(doc.s) ? doc.s : [], preds: doc.p || {} };
+    const daily = (doc.d || []).map(row), weekly = (doc.w || []).map(row), splits = Array.isArray(doc.s) ? doc.s : [];
+    const volumeFixed = adjustVolume(daily, weekly, splits);
+    return { daily, weekly, splits, preds: doc.p || {}, volumeFixed };
   }
   // 全銘柄の一括読み込み(ランキング用)。数十MBになるので cache に置かず、pick で必要な所だけ残す
   async function allChunks(kind, pick, onProgress) {
@@ -147,5 +172,5 @@
     return out;
   }
 
-  root.SRData = { loadMeta, tryStoredKeys, unlock, forget, fs, own, chartDoc, detailDoc, decodeChart, allChunks, get base() { return state.base; }, get meta() { return state.meta; } };
+  root.SRData = { loadMeta, tryStoredKeys, unlock, forget, fs, own, chartDoc, detailDoc, decodeChart, adjustVolume, allChunks, get base() { return state.base; }, get meta() { return state.meta; } };
 })(window);
