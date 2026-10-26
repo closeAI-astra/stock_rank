@@ -129,7 +129,7 @@ body[data-view="chart"] .page-stack { padding: 0; max-width: none; }
 .tv-top { display: flex; align-items: center; gap: 2px; height: 42px; padding: 0 6px; background: var(--tv-bg); border-bottom: 1px solid var(--tv-border); flex: none; overflow-x: auto; scrollbar-width: none; }
 .tv-sep { width: 1px; height: 22px; background: var(--tv-border); margin: 0 4px; flex: none; }
 .tv-spacer { flex: 1; }
-.tv-sym { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 14px; color: var(--tv-text); white-space: nowrap; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.tv-sym { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; font-size: 14px; color: var(--tv-text); white-space: nowrap; max-width: 320px; flex: none; overflow: hidden; text-overflow: ellipsis; }
 .tv-sym b { font-weight: 700; } .tv-sym .tv-sym-ic { color: var(--tv-muted); font-size: 16px; }
 .tv-sym:hover, .tv-ibtn:hover, .tv-tbtn:hover, .tv-group button:hover { background: color-mix(in srgb, var(--tv-text) 8%, transparent); }
 .tv-ibtn { display: inline-grid; place-items: center; min-width: 32px; height: 32px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--tv-text); font-size: 16px; text-decoration: none; flex: none; }
@@ -436,3 +436,4 @@ table.grid td small { display: block; color: var(--muted); font-size: 10px; font
   .top-actions { flex: none; width: auto; margin-left: 0; }
   .settings-link { padding: 8px 10px; }
 }
+@media (max-width: 860px) { .tv-sym { max-width: 46vw; } }
