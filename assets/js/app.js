@@ -1805,7 +1805,7 @@
   // =====================================================================
   // 相場のスケジュール
   // =====================================================================
-  const SCHED_KINDS = [["policy", "金融政策", "#e91e63"], ["macro", "経済指標", "#7e57c2"], ["earnings", "決算(推定)", "#f7a600"], ["earnings_season", "決算シーズン", "#f7a600"], ["sq", "SQ", "#26a69a"], ["rights", "権利・配当落ち", "#ef5350"], ["dividend", "配当・分配金", "#8d6e63"], ["nisa", "積立・NISA", "#42a5f5"], ["index", "指数の入れ替え", "#5c6bc0"], ["credit", "信用期日", "#ff7043"], ["note", "stockAI のメモ", "#78909c"], ["claude", "Claude の調査", "#00acc1"]];
+  const SCHED_KINDS = [["policy", "金融政策", "#e91e63"], ["macro", "経済指標", "#7e57c2"], ["earnings_fixed", "決算(日程確定)", "#ff8f00"], ["earnings", "決算(推定)", "#f7a600"], ["earnings_season", "決算シーズン", "#f7a600"], ["sq", "SQ", "#26a69a"], ["rights", "権利・配当落ち", "#ef5350"], ["dividend", "配当・分配金", "#8d6e63"], ["nisa", "積立・NISA", "#42a5f5"], ["index", "指数の入れ替え", "#5c6bc0"], ["credit", "信用期日", "#ff7043"], ["note", "stockAI のメモ", "#78909c"], ["claude", "Claude の調査", "#00acc1"]];
   const SC = { range: 30, off: new Set(LS.get("stockrank-sched-off", [])), open: new Set() };
   const todayJst = () => new Date(Date.now() + 9 * 36e5).toISOString().slice(0, 10);
   async function loadSchedule() {
@@ -1825,8 +1825,19 @@
     ev.push(...SRCal.creditExpiryEvents(S.instMarket?.margin, from, to));
     (d.policy?.events || []).forEach((e) => { if (e.date >= from && e.date <= to) ev.push({ ...e, kind: "policy" }); });
     (d.econ?.notes?.upcoming || []).forEach((e) => { if (e.date >= from && e.date <= to) ev.push({ date: e.date, kind: "note", title: e.name, note: e.why ? `注目点: ${e.why}` : "" }); });
-    (d.claude?.events || []).forEach((e) => { if (e.date >= from && e.date <= to) ev.push({ date: e.date, kind: e.kind && SCHED_KINDS.some(([k]) => k === e.kind) ? e.kind : "claude", title: e.title, note: [e.note, e.source ? `出典: ${e.source}` : ""].filter(Boolean).join(" · "), claude: true }); });
-    return ev.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (b.strong ? 1 : 0) - (a.strong ? 1 : 0)));
+    (d.claude?.events || []).forEach((e) => { if (e.date >= from && e.date <= to) ev.push({ date: e.date, kind: e.kind === "earnings" ? "earnings_fixed" : e.kind && SCHED_KINDS.some(([k]) => k === e.kind) ? e.kind : "claude", title: e.title, note: [e.note, e.source ? `出典: ${e.source}` : ""].filter(Boolean).join(" · "), claude: true }); });
+    // 日程が確定した決算(Claude の調査)がある会社は、推定の日付を出さない。
+    // 題名に含まれる社名のうち一番長く一致する銘柄をその会社とみなす(「ソフトバンクグループ」を「ソフトバンク」と取り違えないため)
+    const norm = (x) => String(x || "").normalize("NFKC").replace(/\s|株式会社|ホールディングス|フィナンシャル・?グループ/g, "");
+    const fixedCodes = [];
+    ev.filter((e) => e.kind === "earnings_fixed").forEach((e) => {
+      const tt = norm(e.title); let best = null;
+      S.preds.forEach((r) => { const n = norm(r.name); if (n.length >= 2 && tt.includes(n) && (!best || n.length > best.n.length)) best = { code: r.code, n }; });
+      if (best) { fixedCodes.push({ code: best.code, date: e.date }); e.code = best.code; }
+    });
+    const near = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) <= 25 * 864e5;
+    const out = ev.filter((e) => !(e.kind === "earnings" && fixedCodes.some((f) => f.code === e.code && near(f.date, e.date))));
+    return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (b.strong ? 1 : 0) - (a.strong ? 1 : 0)));
   }
   async function renderSchedule() {
     const ctl = $("#schedControls"), body = $("#schedBody");
@@ -1846,7 +1857,7 @@
       earn.sort((a, b) => (mine.has(b.code) ? 1 : 0) - (mine.has(a.code) ? 1 : 0) || (S.byCode.get(a.code)?.rank || 999) - (S.byCode.get(b.code)?.rank || 999));
       const open = SC.open.has(date) || earn.length <= 8;
       const earnHtml = earn.length ? `<div class="sched-item"><span class="kind" style="background:${kindOf("earnings")[2]}">決算(推定)</span><div><b>${earn.length}社</b> ${(open ? earn : earn.slice(0, 8)).map((e) => `<button type="button" class="link ${mine.has(e.code) ? "mine" : ""}" data-code="${esc(e.code)}" title="${esc(e.note)}">${mine.has(e.code) ? "★" : ""}${esc(e.code)} ${esc(S.byCode.get(e.code)?.name || "")}</button>`).join("・")}${!open ? ` <button type="button" class="link" data-sched-open="${date}">ほか ${earn.length - 8}社 ›</button>` : ""}<small>去年の同じ時期の発表日から推定(曜日をそろえて 52 週後)。正式な日付は各社の発表で確認</small></div></div>` : "";
-      const otherHtml = other.map((e) => { const [, l, c] = kindOf(e.kind); return `<div class="sched-item ${e.strong ? "strong" : ""}"><span class="kind" style="background:${c}">${esc(l)}</span><div><b>${esc(e.title)}</b>${e.approx ? ' <em class="approx">目安</em>' : ""}${e.note ? `<small>${esc(e.note)}</small>` : ""}</div></div>`; }).join("");
+      const otherHtml = other.map((e) => { const [, l, c] = kindOf(e.kind); return `<div class="sched-item ${e.strong ? "strong" : ""}"><span class="kind" style="background:${c}">${esc(l)}</span><div><b>${e.code ? `<button type="button" class="link ${mine.has(e.code) ? "mine" : ""}" data-code="${esc(e.code)}">${mine.has(e.code) ? "★" : ""}${esc(e.title)}</button>` : esc(e.title)}</b>${e.approx ? ' <em class="approx">目安</em>' : ""}${e.note ? `<small>${esc(e.note)}</small>` : ""}</div></div>`; }).join("");
       return `<div class="sched-day ${date === from ? "today" : ""}"><div class="sched-date"><b>${esc(date.slice(5).replace("-", "/"))}</b><span class="${["日", "土"].includes(wd(date)) ? "we" : ""}">${wd(date)}</span>${date === from ? "<em>今日</em>" : ""}</div><div class="sched-items">${otherHtml}${earnHtml}</div></div>`;
     }).join("");
     const study = SRCal.eventStudy(idxRows("TPX"));
