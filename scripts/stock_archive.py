@@ -425,6 +425,11 @@ class Fetcher:
             self.robots.parse(text.splitlines())
             lines = [l for l in text.splitlines() if l.strip() and not l.strip().startswith("#")]
             self.robots_note = f"robots.txt: HTTP 200 · {len(lines)} 行"
+            # Crawl-delay があれば、指定の間隔より短くしない
+            cd = self.robots.crawl_delay(UA) or self.robots.crawl_delay("*")
+            if cd and float(cd) > self.delay:
+                self.delay = float(cd)
+                self.robots_note += f" · Crawl-delay {cd}秒に従い、間隔を {self.delay}秒にします"
             print(self.robots_note + "\n  " + "\n  ".join(lines[:40]) + ("\n  …" if len(lines) > 40 else ""), flush=True)
         except urllib.error.HTTPError as e:
             self.robots_status = e.code

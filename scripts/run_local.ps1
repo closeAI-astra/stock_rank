@@ -46,8 +46,23 @@ git add "data/$Source"
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
   git commit -m "$Source archive (local) $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
-  git push
-  Write-Host "GitHub に送りました。数分で Stock Rank のページに反映されます。"
+}
+# まだ GitHub に送っていない分(前回 push に失敗した分も含む)をまとめて送る。
+# 取得中に GitHub 側が進んでいる(定期取得のボットなど)と push は拒否されるので、取り込んでから送り直す
+$ahead = [int](git rev-list --count '@{u}..HEAD')
+if ($ahead -gt 0) {
+  $sent = $false
+  for ($i = 1; $i -le 4; $i++) {
+    git pull --rebase
+    git push
+    if ($LASTEXITCODE -eq 0) { $sent = $true; break }
+    Start-Sleep -Seconds (5 * $i)
+  }
+  if ($sent) {
+    Write-Host "GitHub に送りました($ahead 件)。数分で Stock Rank のページに反映されます。"
+  } else {
+    Write-Warning "GitHub に送れませんでした。データはこの PC に残っているので、次にこのスクリプトを実行したときに送り直します(すぐ送るなら: git pull --rebase; git push)"
+  }
 } else {
   Write-Host "新しく保存したものはありませんでした。"
 }
