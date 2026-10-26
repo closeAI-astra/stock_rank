@@ -138,6 +138,14 @@ def main() -> int:
     if opts.urls:
         f = Fetcher(1.5, "https://www.jpx.co.jp")
         for u in [x.strip() for x in opts.urls.split(",") if x.strip()]:
+            if re.search(r"\.html?$|/$", u):
+                # ページはリンクを全部出す(どこに何があるかを調べる)
+                st, html, final = f.get(u)
+                print(f"\n--- {u} -> HTTP {st}")
+                for href, text in links(html, final):
+                    if href.startswith("https://www.jpx.co.jp/markets") or FILE_RE.search(href):
+                        print(f"    {href}  [{text}]")
+                continue
             print(f"\n  SAMPLE {u}")
             sample_file(f, u)
         return 0
