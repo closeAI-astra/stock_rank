@@ -49,6 +49,7 @@ JST = dt.timezone(dt.timedelta(hours=9))
 MARKET_RE = re.compile(r"信用(残|取引|倍率|評価)|空売り|貸借|裁定|投資部門|売買動向|騰落")
 # ページ送りとみなすクエリ(これ以外が違うリンクは別ページ)
 PAGING_KEYS = {"page", "p", "pg", "y", "year"}
+ARCHIVE_VERSION = 2  # 取り方を直したら上げる(古い版で取った銘柄は取り直す)
 GIVE_UP_AFTER = 3  # 見つからない銘柄(上場廃止など)は3回失敗したら定期実行では諦める
 
 
@@ -628,6 +629,9 @@ def main() -> int:
         s = index["stocks"].get(c)
         if explicit or not s:
             return True
+        # IRBANK: 2026-10-26 より前の取り方(ページ送りの年がずれて古い信用残が重なって消えていた)で取った銘柄は取り直す
+        if src.name == "irbank" and s.get("status") == "ok" and s.get("v", 1) < ARCHIVE_VERSION:
+            return True
         if s.get("status") != "ok":
             return s.get("attempts", 1) < GIVE_UP_AFTER
         if cutoff and s.get("fetchedAt"):
@@ -677,7 +681,7 @@ def main() -> int:
                    "pages": res["pages"] + [p for p in old.get("pages", []) if p.get("name") not in fresh],
                    "margin": margin, "edinetCodes": res.get("edinetCodes", []) or old.get("edinetCodes", []), "release": opts.release_tag or old.get("release")}
             doc_path.write_bytes(encrypt_json(doc, key))
-            index["stocks"][code] = {"status": "ok", "name": names.get(code, ""), "fetchedAt": doc["fetchedAt"], "marginRows": len(margin), "marginFrom": margin[0]["date"] if margin else None, "marginTo": margin[-1]["date"] if margin else None, "pages": {p["name"]: p["status"] for p in doc["pages"]}}
+            index["stocks"][code] = {"status": "ok", "v": ARCHIVE_VERSION, "name": names.get(code, ""), "fetchedAt": doc["fetchedAt"], "marginRows": len(margin), "marginFrom": margin[0]["date"] if margin else None, "marginTo": margin[-1]["date"] if margin else None, "pages": {p["name"]: p["status"] for p in doc["pages"]}}
             done += 1
         else:
             failed += 1
