@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Stock Rank</title>
   <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
-  <link rel="stylesheet" href="assets/css/app.css?v=19a173f79d">
+  <link rel="stylesheet" href="assets/css/app.css?v=e5b21d9bf1">
   <!-- テーマは Future Sight と同じ保存先(同じ github.io なら両方に効く)。読み込み前に当てて、ちらつきを防ぐ -->
   <script>try { if (localStorage.getItem("stockrank-sidebar") === "closed") document.documentElement.classList.add("sidebar-closed"); } catch { /* */ }</script>
   <script>try { const t = localStorage.getItem("future-sight-theme"); if (["light", "dark", "prototype", "earth"].includes(t)) document.documentElement.dataset.fsTheme = t; } catch { /* */ }</script>
@@ -26,6 +26,7 @@
         <a class="nav-item" href="#chart" data-nav="chart"><span class="nav-icon">⟋</span><span>チャート</span></a>
         <a class="nav-item" href="#rank" data-nav="rank"><span class="nav-icon">☷</span><span>ランキング・信用</span></a>
         <a class="nav-item" href="#macro" data-nav="macro"><span class="nav-icon">◇</span><span>マクロ・貿易</span></a>
+        <a class="nav-item" href="#schedule" data-nav="schedule"><span class="nav-icon">▤</span><span>スケジュール</span></a>
         <a class="nav-item" href="#archive" data-nav="archive"><span class="nav-icon">▦</span><span>保存データ</span></a>
         <a class="nav-item" href="#settings" data-nav="settings"><span class="nav-icon">⚙</span><span>設定</span></a>
         <a class="nav-item" href="#about" data-nav="about"><span class="nav-icon">?</span><span>使い方</span></a>
@@ -123,6 +124,12 @@
     </section>
 
     <!-- マクロ・貿易 -->
+    <section class="view page" data-view="schedule">
+      <div class="page-head"><p class="eyebrow">SCHEDULE</p><h1>相場のスケジュール</h1><p>決算(推定)・日銀/FOMC・経済指標・SQ・権利付き最終日・月初の積立・指数の入れ替え・配当の支払い・信用期日など。下に、過去の TOPIX の動き(イベント別)。</p></div>
+      <div class="sched-controls" id="schedControls"></div>
+      <div id="schedBody"><p class="muted pad">読み込み中…</p></div>
+    </section>
+
     <section class="view page" data-view="macro">
       <div class="page-head"><p class="eyebrow">MACRO · TRADE</p><h1>マクロ・貿易統計</h1><p id="macroSub">stockAI(Future Sight)が集めた貿易統計・経済指標・市況。</p></div>
       <div class="tabs" id="macroTabs" role="tablist"></div>
@@ -190,6 +197,7 @@
   <div class="modal" id="tradeModal" hidden><div class="modal-box trade-box" role="dialog" aria-label="売買を記録"><header><b id="tradeModalTitle">売買を記録</b><button type="button" class="tv-ibtn" data-close>✕</button></header>
     <form id="tradeForm" class="trade-form">
       <div class="seg trade-side"><label><input type="radio" name="side" value="buy" checked><span>買い</span></label><label><input type="radio" name="side" value="sell"><span>売り</span></label></div>
+      <label class="wide">銘柄<input type="text" name="code" list="tradeCodes" required placeholder="コード(例: 7203)" autocomplete="off"></label><datalist id="tradeCodes"></datalist>
       <label>約定日<input type="date" name="date" required></label>
       <label>約定単価(円)<input type="number" name="price" step="any" min="0" required></label>
       <label>株数<input type="number" name="qty" step="1" min="1" value="100" required></label>
@@ -206,7 +214,8 @@
   <script src="assets/js/indicators.js?v=ab227dd66f"></script>
   <script src="assets/js/analytics.js?v=46ee895628"></script>
   <script src="assets/js/trades.js?v=215a726e0f"></script>
+  <script src="assets/js/calendar.js?v=b45de4fd75"></script>
   <script src="assets/js/drawings.js?v=853bb759a2"></script>
-  <script src="assets/js/app.js?v=ec5fbcf9b5"></script>
+  <script src="assets/js/app.js?v=95f8f59c5a"></script>
 </body>
 </html>

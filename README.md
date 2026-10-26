@@ -11,6 +11,7 @@ stockAI(Future Sight)が集めた実データ(株価・決算・配当・財務�
 | 指数 | 日経平均・TOPIX・NASDAQ・S&P500・VIX・米10年債・ドル円の日足チャート(2020年〜)。日本株の指数には市場の信用残(株探・IRBANK から保存した東証全体、無ければ stockAI 対象銘柄の合計)、指数の統計・季節性・相関、投資部門別売買、騰落・業種 |
 | ランキング・信用 | 全銘柄の信用倍率・買残/売残と金額・推定評価損益率・4週変化・買残の出来高比などを並び替え。対象銘柄合計の推定評価損益率(金額加重)の週次推移 |
 | マクロ・貿易 | 財務省の貿易統計(輸出入・品目別・地域別・収支)、輸出・受注系の指標(韓国輸出・TSMC 月次など)、経済指標、市況・コモディティ |
+| スケジュール | 決算(去年の発表日から推定)・日銀/FOMC(`data/events/policy.json`)・経済指標・SQ・権利付き最終日/権利落ち日・月初の積立 NISA・指数の入れ替え・配当の支払い・信用期日(市場全体)・stockAI のメモ・Claude の調査(`data/events/claude.json`、毎週の定期タスク)。下に過去の TOPIX のイベント別の動き |
 | 保存データ | 下記ワークフローで保存した株探・IRBANK データの取得状況 |
 
 ### 操作(チャート)
@@ -135,6 +136,7 @@ Settings → Pages → Source を「Deploy from a branch」にして、このブ
 node tests/credit.test.js                  # 推定評価損益率の計算
 node tests/analytics.test.js               # VWAP・価格帯別出来高・進捗率・回帰・権利落ち・信用期日
 node tests/trades.test.js                  # 売買の記録の対応づけ・CSV
+node tests/calendar.test.js                # スケジュールの決まりごと・決算日の推定
 python -m unittest tests/test_archive.py   # 株探・IRBANK の表の取り出し・ページ送り・暗号
 python -m unittest tests/test_inst.py      # JPX・日証金・EDINET のファイルの取り出し
 python tests/make_mock.py OUT pass          # 偽の stockAI データ(画面の確認用)

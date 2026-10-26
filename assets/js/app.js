@@ -124,7 +124,7 @@
   function route() {
     const h = location.hash.replace(/^#/, "");
     const [view, arg] = h.split("/");
-    const v = ["chart", "rank", "macro", "archive", "settings", "about"].includes(view) ? view : "chart";
+    const v = ["chart", "rank", "macro", "schedule", "archive", "settings", "about"].includes(view) ? view : "chart";
     S.view = v;
     $$(".view").forEach((el) => el.classList.toggle("active", el.dataset.view === v));
     $$("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === v));
@@ -137,6 +137,7 @@
     }
     if (v === "rank") renderRank();
     if (v === "macro") renderMacro();
+    if (v === "schedule") renderSchedule();
     if (v === "archive") renderArchive();
     if (v === "settings") renderSettings();
   }
@@ -197,6 +198,18 @@
   // =====================================================================
   // 設定
   // =====================================================================
+  // 設定: 売買の記録(全銘柄)
+  function settingsTrades() {
+    const by = new Map(); S.trades.forEach((t) => { if (!by.has(t.code)) by.set(t.code, []); by.get(t.code).push(t); });
+    const sum = [...by.entries()].map(([code, list]) => { const m = SRTrades.match(list); return { code, name: S.byCode.get(code)?.name || "", n: list.length, m, last: SRTrades.sortTrades(list).at(-1)?.date }; }).sort((a, b) => (a.last < b.last ? 1 : -1));
+    const recent = SRTrades.sortTrades(S.trades).reverse().slice(0, 300);
+    return `<section class="panel settings"><h3>売買の記録</h3>
+      <p class="foot">ここで記録した売買は、チャートに買い=赤・売り=青の点で出て、対応する売買が薄い線で結ばれます。記録はこの端末のブラウザだけに保存します(GitHub には送りません)。</p>
+      <div class="set-actions"><button type="button" class="btn primary" data-trade-add>＋ 売買を記録</button><label class="btn">証券会社の CSV を読み込む<input type="file" accept=".csv,.txt" data-trade-csv hidden></label><button type="button" class="btn" data-trade-export ${S.trades.length ? "" : "disabled"}>CSV で保存(${S.trades.length}件)</button></div>
+      ${sum.length ? `<h4>銘柄ごと</h4><div class="table-wrap"><table class="grid"><thead><tr><th>銘柄</th><th>記録</th><th>保有</th><th>平均単価</th><th>確定した損益</th><th>勝ち/回数</th><th>最後の売買</th></tr></thead><tbody>${sum.map((x) => `<tr><th><button type="button" class="link" data-code="${esc(x.code)}"><b>${esc(x.code)}</b> ${esc(x.name)}</button></th><td>${x.n}件</td><td>${x.m.position ? `${x.m.position > 0 ? "" : "売り "}${fmt(Math.abs(x.m.position))}株` : "—"}</td><td>${x.m.avgPrice ? fmtPrice(x.m.avgPrice) : "—"}</td><td class="${cls(x.m.realized)}">${x.m.closed ? `${x.m.realized >= 0 ? "+" : ""}${fmt(x.m.realized)}` : "—"}</td><td>${x.m.wins}/${x.m.closed}</td><td>${esc(x.last || "")}</td></tr>`).join("")}</tbody></table></div>
+      <h4>すべての売買(新しい順)</h4><div class="table-wrap tall"><table class="grid"><thead><tr><th>約定日</th><th>銘柄</th><th>売買</th><th>単価</th><th>株数</th><th>メモ</th><th></th></tr></thead><tbody>${recent.map((t) => `<tr><th>${esc(t.date)}</th><td class="left">${esc(t.code)} ${esc(S.byCode.get(t.code)?.name || "")}</td><td><b style="color:${t.side === "buy" ? "#e53935" : "#1e88e5"}">${t.side === "buy" ? "買" : "売"}</b></td><td>${fmtPrice(t.price)}</td><td>${fmt(t.qty)}</td><td class="left">${esc(t.note || "")}</td><td><button type="button" class="link" data-trade-edit="${esc(t.id)}">直す</button></td></tr>`).join("")}</tbody></table></div>` : '<div class="empty">まだ記録はありません。「＋ 売買を記録」か、証券会社の約定履歴の CSV(SBI・楽天など)から追加します。</div>'}
+    </section>`;
+  }
   function renderSettings() {
     const body = $("#settingsBody"); if (!body) return;
     const theme = document.documentElement.dataset.fsTheme || "light";
@@ -217,15 +230,22 @@
       <section class="panel settings"><h3>信用残</h3>
         <div class="set-grid"><label>推定評価損益率の計算方法<select data-set="creditMethod">${opt([["fifo6m", "先入れ先出し+6か月期日(既定)"], ["avg", "移動平均法"]], S.set.creditMethod)}</select></label></div>
         <p class="foot">計算方法の違いは「使い方」を参照。ランキングの計算方法もここに合わせます。</p></section>
+      ${settingsTrades()}
       <section class="panel settings"><h3>この端末に保存したもの</h3>
         <div class="set-actions">
           <button type="button" class="btn" data-reset="favs">お気に入りを消す(${S.favs.size}件)</button>
           <button type="button" class="btn" data-reset="drawings">チャートの描画を全部消す</button>
+          <button type="button" class="btn" data-reset="trades">売買の記録を全部消す(${S.trades.length}件)</button>
           <button type="button" class="btn" data-reset="settings">設定を初期値に戻す</button>
           <button type="button" class="btn danger" data-reset="key">保存したパスワードを消して閉じる</button>
         </div>
         <p class="foot">データの配信元: ${esc(SRData.base || "—")} · データの時点: ${esc(String(S.dash?.asOf || "—"))}</p></section>`;
     $$("[data-set-theme]", body).forEach((b) => b.addEventListener("click", () => { setTheme(b.dataset.setTheme); renderSettings(); }));
+    $$("[data-trade-add]", body).forEach((b) => b.addEventListener("click", () => openTradeModal({ code: "" })));
+    $$("[data-trade-edit]", body).forEach((b) => b.addEventListener("click", () => openTradeModal(S.trades.find((t) => t.id === b.dataset.tradeEdit))));
+    $$("[data-trade-csv]", body).forEach((inp) => inp.addEventListener("change", () => { if (inp.files[0]) importTradesCsv(inp.files[0]); }));
+    $$("[data-trade-export]", body).forEach((b) => b.addEventListener("click", () => download("stockrank_trades.csv", SRTrades.toCsv(S.trades))));
+    $$("[data-code]", body).forEach((b) => b.addEventListener("click", () => goChart(b.dataset.code)));
     $$("[data-set]", body).forEach((el) => el.addEventListener("change", () => {
       const k = el.dataset.set; S.set[k] = k === "scale" ? Number(el.value) : el.value; saveSettings(); afterSettings();
       if (k === "creditMethod" && S.cur && !S.cur.isIndex) computeEst(S.cur);
@@ -237,7 +257,8 @@
     $$("[data-reset]", body).forEach((b) => b.addEventListener("click", () => {
       const what = b.dataset.reset;
       if (what === "favs") { S.favs.clear(); LS.set("stockrank-favs", []); renderWatch(); }
-      if (what === "drawings") { try { Object.keys(localStorage).filter((k) => k.startsWith("stockrank-draw-")).forEach((k) => localStorage.removeItem(k)); } catch { /* */ } S.drawings = { h: [], t: [] }; }
+      if (what === "drawings") { try { Object.keys(localStorage).filter((k) => k.startsWith("stockrank-draw")).forEach((k) => localStorage.removeItem(k)); } catch { /* */ } S.drawings = []; if (drawLayer) { drawLayer.items = S.drawings; drawLayer.update(); } }
+      if (what === "trades") { if (!confirm(`この端末に保存した売買の記録 ${S.trades.length}件をすべて消します。先に CSV で保存しましたか?`)) return; S.trades = []; saveTrades(); }
       if (what === "settings") { S.set = { ...DEFAULTS }; saveSettings(); afterSettings(); }
       if (what === "key") { if (!confirm("この端末に保存したパスワード(復号の鍵)を消して、ページを閉じた状態に戻します。よろしいですか?")) return; SRData.forget(); location.reload(); return; }
       toast("消しました"); renderSettings();
@@ -1409,18 +1430,20 @@
     if (tradeData.key !== key) { tradeData.key = key; tradeData.val = { trades: list, pairs: SRTrades.match(list).pairs }; }
     return tradeData.val;
   }
-  function saveTrades() { SRTrades.save(S.trades); S.tradesVer = (S.tradesVer || 0) + 1; if (chart && S.cur) { renderLegend(null); tradeLayer?.update(); } if (["trades"].includes(S.set.bottomTab)) renderBottom(); }
+  function saveTrades() { SRTrades.save(S.trades); S.tradesVer = (S.tradesVer || 0) + 1; if (chart && S.cur) { renderLegend(null); tradeLayer?.update(); } if (["trades"].includes(S.set.bottomTab)) renderBottom(); if (S.view === "settings") renderSettings(); }
   let tradeEditing = null;
   function openTradeModal(init = {}) {
-    if (!S.cur || S.cur.isIndex) { toast("売買は個別銘柄のチャートで記録します"); return; }
     tradeEditing = init.id ? init : null;
-    const f = $("#tradeForm"); const last = S.cur.daily.at(-1);
+    const code = init.code || (S.cur && !S.cur.isIndex ? S.code : "");
+    const f = $("#tradeForm"); const last = code === S.code && S.cur && !S.cur.isIndex ? S.cur.daily.at(-1) : null;
+    const dl = $("#tradeCodes"); if (!dl.dataset.built) { dl.innerHTML = S.preds.map((r) => `<option value="${esc(r.code)}">${esc(r.code)} ${esc(r.name || "")}</option>`).join(""); dl.dataset.built = "1"; }
+    f.code.value = code;
     f.date.value = init.date || last?.d || ""; f.price.value = init.price !== undefined && init.price !== null ? Number(init.price).toFixed(Math.abs(init.price) >= 1000 ? 0 : 1) : (last?.c ?? "");
     f.qty.value = init.qty || 100; f.note.value = init.note || "";
     $$("input[name=side]", f).forEach((r) => { r.checked = r.value === (init.side || "buy"); });
-    $("#tradeModalTitle").textContent = tradeEditing ? `売買の記録を直す(${S.code})` : `売買を記録(${S.code} ${S.cur.row?.name || ""})`;
+    $("#tradeModalTitle").textContent = tradeEditing ? "売買の記録を直す" : "売買を記録";
     $("#tradeForm .trade-actions").innerHTML = `${tradeEditing ? '<button type="button" class="btn danger" data-trade-del>この記録を消す</button>' : ""}<button type="button" class="btn" data-close>やめる</button><button type="submit" class="btn primary">${tradeEditing ? "保存" : "記録する"}</button>`;
-    $("#tradeModal").hidden = false; f.price.focus();
+    $("#tradeModal").hidden = false; (code ? f.price : f.code).focus();
   }
   function bindTrades() {
     const f = $("#tradeForm");
@@ -1428,7 +1451,9 @@
       e.preventDefault();
       const side = $("input[name=side]:checked", f).value; const price = Number(f.price.value), qty = Number(f.qty.value);
       if (!f.date.value || !(price > 0) || !(qty > 0)) return;
-      const rec = { id: tradeEditing?.id || SRTrades.newId(), code: S.code, date: f.date.value, side, price, qty, note: f.note.value.trim(), seq: Date.now() };
+      const code = (f.code.value.trim().toUpperCase().match(/[0-9][0-9A-Z]{3}/) || [])[0];
+      if (!code) { toast("銘柄コード(4桁)を入れてください"); f.code.focus(); return; }
+      const rec = { id: tradeEditing?.id || SRTrades.newId(), code, date: f.date.value, side, price, qty, note: f.note.value.trim(), seq: Date.now() };
       S.trades = [...S.trades.filter((t) => t.id !== rec.id), rec]; saveTrades(); closeModals();
     });
     f.addEventListener("click", (e) => { if (e.target.closest("[data-trade-del]") && tradeEditing) { S.trades = S.trades.filter((t) => t.id !== tradeEditing.id); saveTrades(); closeModals(); } });
@@ -1775,6 +1800,65 @@
     [0, -10, -20].forEach((lv) => b.createPriceLine({ price: lv, color: lv ? alpha(css("--down"), 0.5) : css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: !!lv, title: lv ? `${lv}%` : "" }));
     const r = rankChart.addSeries(LW.LineSeries, { color: "#ffb300", lineWidth: 1, priceScaleId: "left", title: "信用倍率(金額)", priceFormat: { type: "price", precision: 2, minMove: 0.01 } }); r.setData(agg.filter((o) => o.ratio !== null).map((o) => ({ time: o.time, value: o.ratio })));
     rankChart.timeScale().fitContent();
+  }
+
+  // =====================================================================
+  // 相場のスケジュール
+  // =====================================================================
+  const SCHED_KINDS = [["policy", "金融政策", "#e91e63"], ["macro", "経済指標", "#7e57c2"], ["earnings", "決算(推定)", "#f7a600"], ["earnings_season", "決算シーズン", "#f7a600"], ["sq", "SQ", "#26a69a"], ["rights", "権利・配当落ち", "#ef5350"], ["dividend", "配当・分配金", "#8d6e63"], ["nisa", "積立・NISA", "#42a5f5"], ["index", "指数の入れ替え", "#5c6bc0"], ["credit", "信用期日", "#ff7043"], ["note", "stockAI のメモ", "#78909c"], ["claude", "Claude の調査", "#00acc1"]];
+  const SC = { range: 30, off: new Set(LS.get("stockrank-sched-off", [])), open: new Set() };
+  const todayJst = () => new Date(Date.now() + 9 * 36e5).toISOString().slice(0, 10);
+  async function loadSchedule() {
+    if (S.sched) return S.sched;
+    const json = (u) => fetch(u, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    const [policy, claude, econ, earnings, inst] = await Promise.all([json("data/events/policy.json"), json("data/events/claude.json"), SRData.fs("econ").catch(() => null), SRData.fs("earnings").catch(() => null), S.instMarket !== undefined ? S.instMarket : SRData.own("inst/market").catch(() => null)]);
+    if (S.instMarket === undefined) S.instMarket = inst;
+    S.sched = { policy, claude, econ, earnings };
+    return S.sched;
+  }
+  function scheduleEvents(from, to) {
+    const tpx = idxRows("TPX"); const cal = SRCal.makeBizCal(tpx.map((r) => r.d));
+    const names = Object.fromEntries(S.preds.map((r) => [r.code, r.name]));
+    const d = S.sched || {}; const ev = [];
+    ev.push(...SRCal.ruleEvents(from, to, cal));
+    ev.push(...SRCal.estimateEarnings(d.earnings, from, to, names));
+    ev.push(...SRCal.creditExpiryEvents(S.instMarket?.margin, from, to));
+    (d.policy?.events || []).forEach((e) => { if (e.date >= from && e.date <= to) ev.push({ ...e, kind: "policy" }); });
+    (d.econ?.notes?.upcoming || []).forEach((e) => { if (e.date >= from && e.date <= to) ev.push({ date: e.date, kind: "note", title: e.name, note: e.why ? `注目点: ${e.why}` : "" }); });
+    (d.claude?.events || []).forEach((e) => { if (e.date >= from && e.date <= to) ev.push({ date: e.date, kind: e.kind && SCHED_KINDS.some(([k]) => k === e.kind) ? e.kind : "claude", title: e.title, note: [e.note, e.source ? `出典: ${e.source}` : ""].filter(Boolean).join(" · "), claude: true }); });
+    return ev.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : (b.strong ? 1 : 0) - (a.strong ? 1 : 0)));
+  }
+  async function renderSchedule() {
+    const ctl = $("#schedControls"), body = $("#schedBody");
+    await loadSchedule();
+    const from = todayJst(), to = SRCal.add(from, SC.range);
+    const all = scheduleEvents(from, to);
+    const counts = Object.fromEntries(SCHED_KINDS.map(([k]) => [k, all.filter((e) => e.kind === k).length]));
+    ctl.innerHTML = `${seg([[7, "1週間"], [14, "2週間"], [30, "1か月"], [90, "3か月"]].map(([v, l]) => [String(v), l]), String(SC.range), "sched-range")}
+      <div class="sched-kinds">${SCHED_KINDS.filter(([k]) => counts[k]).map(([k, l, c]) => `<button type="button" class="chip-btn ${SC.off.has(k) ? "off" : ""}" data-sched-kind="${k}"><i style="background:${c}"></i>${l}<small>${counts[k]}</small></button>`).join("")}</div>`;
+    const mine = new Set([...S.favs, ...S.trades.map((t) => t.code)]);
+    const list = all.filter((e) => !SC.off.has(e.kind));
+    const byDate = new Map(); list.forEach((e) => { if (!byDate.has(e.date)) byDate.set(e.date, []); byDate.get(e.date).push(e); });
+    const wd = (d) => "日月火水木金土"[new Date(`${d}T00:00:00Z`).getUTCDay()];
+    const kindOf = (k) => SCHED_KINDS.find(([x]) => x === k) || [k, k, "#999"];
+    const dayHtml = [...byDate.entries()].map(([date, items]) => {
+      const earn = items.filter((e) => e.kind === "earnings"), other = items.filter((e) => e.kind !== "earnings");
+      earn.sort((a, b) => (mine.has(b.code) ? 1 : 0) - (mine.has(a.code) ? 1 : 0) || (S.byCode.get(a.code)?.rank || 999) - (S.byCode.get(b.code)?.rank || 999));
+      const open = SC.open.has(date) || earn.length <= 8;
+      const earnHtml = earn.length ? `<div class="sched-item"><span class="kind" style="background:${kindOf("earnings")[2]}">決算(推定)</span><div><b>${earn.length}社</b> ${(open ? earn : earn.slice(0, 8)).map((e) => `<button type="button" class="link ${mine.has(e.code) ? "mine" : ""}" data-code="${esc(e.code)}" title="${esc(e.note)}">${mine.has(e.code) ? "★" : ""}${esc(e.code)} ${esc(S.byCode.get(e.code)?.name || "")}</button>`).join("・")}${!open ? ` <button type="button" class="link" data-sched-open="${date}">ほか ${earn.length - 8}社 ›</button>` : ""}<small>去年の同じ時期の発表日から推定(曜日をそろえて 52 週後)。正式な日付は各社の発表で確認</small></div></div>` : "";
+      const otherHtml = other.map((e) => { const [, l, c] = kindOf(e.kind); return `<div class="sched-item ${e.strong ? "strong" : ""}"><span class="kind" style="background:${c}">${esc(l)}</span><div><b>${esc(e.title)}</b>${e.approx ? ' <em class="approx">目安</em>' : ""}${e.note ? `<small>${esc(e.note)}</small>` : ""}</div></div>`; }).join("");
+      return `<div class="sched-day ${date === from ? "today" : ""}"><div class="sched-date"><b>${esc(date.slice(5).replace("-", "/"))}</b><span class="${["日", "土"].includes(wd(date)) ? "we" : ""}">${wd(date)}</span>${date === from ? "<em>今日</em>" : ""}</div><div class="sched-items">${otherHtml}${earnHtml}</div></div>`;
+    }).join("");
+    const study = SRCal.eventStudy(idxRows("TPX"));
+    const studyHtml = study.length ? `<section class="panel"><div class="row-head"><h3>過去の TOPIX の動き(イベント別)</h3><small>${esc(idxRows("TPX")[0]?.d || "")} からの日足。当日 = 前日の終値から当日の終値まで、前5日・後5日はその日をはさむ5営業日の騰落の平均</small></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>イベント</th><th>回数</th><th>当日の平均</th><th>上がった割合</th><th>前5日</th><th>後5日</th></tr></thead><tbody>${study.map((x) => `<tr><th>${esc(x.label)}</th><td>${x.n}</td><td>${pctCell(x.day, 2)}</td><td>${Math.round(x.win * 100)}%</td><td>${pctCell(x.pre, 2)}</td><td>${pctCell(x.post, 2)}</td></tr>`).join("")}</tbody></table></div>
+      <p class="foot">TOPIX は配当を含まない指数なので、権利落ち日は配当の分だけ下がって見えます。回数が少ないものは偶然の影響が大きい点に注意。</p></section>` : "";
+    const src = [S.sched?.policy?.note, S.sched?.claude ? `Claude の調査: ${S.sched.claude.updatedAt || ""} 更新` : "Claude の調査: まだありません(毎週の定期タスクで追加)"].filter(Boolean).join(" / ");
+    body.innerHTML = `${dayHtml || empty("この期間に表示するイベントはありません。")}<p class="foot">${esc(src)}。決まりごとから計算した日付は「目安」と付けています(祝日・臨時の変更でずれることがあります)。★はお気に入り・売買を記録した銘柄。</p>${studyHtml}`;
+    $$("[data-sched-range]", ctl).forEach((b) => b.addEventListener("click", () => { SC.range = Number(b.dataset.schedRange); renderSchedule(); }));
+    $$("[data-sched-kind]", ctl).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.schedKind; SC.off.has(k) ? SC.off.delete(k) : SC.off.add(k); LS.set("stockrank-sched-off", [...SC.off]); renderSchedule(); }));
+    $$("[data-sched-open]", body).forEach((b) => b.addEventListener("click", () => { SC.open.add(b.dataset.schedOpen); renderSchedule(); }));
+    $$("[data-code]", body).forEach((b) => b.addEventListener("click", () => goChart(b.dataset.code)));
   }
 
   // =====================================================================
