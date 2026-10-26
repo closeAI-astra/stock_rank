@@ -142,9 +142,14 @@ def main() -> int:
                 # ページはリンクを全部出す(どこに何があるかを調べる)
                 st, html, final = f.get(u)
                 print(f"\n--- {u} -> HTTP {st}")
+                sampled = 0
                 for href, text in links(html, final):
                     if href.startswith("https://www.jpx.co.jp/markets") or FILE_RE.search(href):
                         print(f"    {href}  [{text}]")
+                    if sampled < 2 and re.search(r"\.(xls|xlsx|csv)$", href, re.I):
+                        sampled += 1
+                        print(f"\n  SAMPLE {href}")
+                        sample_file(f, href)
                 continue
             print(f"\n  SAMPLE {u}")
             sample_file(f, u)
