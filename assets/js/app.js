@@ -1699,18 +1699,27 @@
     prog.hidden = false;
     const step = (label) => (done, total) => { $("i", prog).style.width = `${Math.round(done / total * 100)}%`; $("span", prog).textContent = `${label} ${done}/${total}`; };
     rankLoaded = (async () => {
-      const details = await SRData.allChunks("detail", (doc) => ({ credit: doc?.credit || [], shares: num(doc?.irbank?.security?.issued_shares) }), step("信用残を読み込み中"));
+      const details = await SRData.allChunks("detail", (doc) => { const k = doc?.kabutan || {}; const slim = (rows, keys) => (rows || []).map((r) => Object.fromEntries(["period", "end", "forecast", "irregular", "announce", "availableFrom", ...keys].map((x) => [x, r[x]]))); return { credit: doc?.credit || [], shares: num(doc?.irbank?.security?.issued_shares), fund: { annual: slim(k.annual, ["sales", "op", "net", "dps", "eps"]), balance: slim(k.balance, ["equity", "equity_ratio"]), quarter: slim(k.quarter, ["sales", "op"]) } }; }, step("信用残を読み込み中"));
       const charts = await SRData.allChunks("chart", (doc) => { const dec = SRData.decodeChart(doc); const first = dec.daily[0]?.d || "9999"; return { prices: [...dec.weekly.filter((r) => r.d < first), ...dec.daily], splits: dec.splits, dailyFrom: first }; }, step("株価を読み込み中"));
       prog.hidden = true;
       return { details, charts };
     })().catch((e) => { rankLoaded = null; prog.hidden = true; throw e; });
     return rankLoaded;
   }
+  // IRBANK の発行済株式数は保存した時点の値なので、その後に分割があると少なく出る(時価総額が小さく出る)。
+  // 株探の EPS は今の株数にそろえてあるので、純利益 ÷ EPS ≒ 今の株数。分割の比率をかけた方が近ければかける
+  function fixShares(shares, fund, splits) {
+    if (!shares) return shares; let a = null;
+    (fund?.annual || []).forEach((r) => { if (!r.forecast && r.net > 0 && r.eps > 0 && (!a || (r.availableFrom || "") > (a.availableFrom || ""))) a = r; });
+    if (!a) return shares; const est = a.net * 1e6 / a.eps; let out = shares;
+    (splits || []).forEach(([d, r]) => { const x = Number(r); if (x > 1 && d >= SRCal.add(todayJst(), -730) && Math.abs(Math.log(est / (out * x))) < Math.abs(Math.log(est / out)) - 0.2) out *= x; });
+    return out;
+  }
   function computeRank(data) {
     const method = $("#rankMethod")?.value || S.set.creditMethod;
     const factors = { tpx: idxRows("TPX"), fx: idxRows("USDJPY"), tnx: idxRows("TNX") };
     const list = S.preds.map((p) => {
-      const d = data.details[p.code], c = data.charts[p.code];
+      const d = data.details[p.code], c = data.charts[p.code]; if (d && !d.sharesFixed) { d.shares = fixShares(d.shares, d.fund, c?.splits); d.sharesFixed = true; }
       const est = d && c ? SRCredit.estimateCredit(dropErrata(d.credit), c.prices, c.splits, { method }) : { rows: [] };
       const rows = est.rows; const last = rows.at(-1) || null; const price = c?.prices.at(-1)?.c ?? p.close;
       const daily = c ? c.prices.filter((r) => r.d >= (c.dailyFrom || "0000")) : [];
@@ -1804,147 +1813,299 @@
   }
 
   // =====================================================================
-  // 相関を探す(全銘柄の2つの指標の散布図)
+  // 相関を探す(全銘柄の2つの指標の散布図・軌跡・相関の表)
   // =====================================================================
-  const EX = Object.assign({ x: "ret", y: "dd", n: 3, m: 3, base: "m24", uni: "", ind: "", scan: null }, LS.get("stockrank-explore", {}));
+  const EX_DEF = { x: "ret", y: "dd", n: 3, m: 3, base: "m24", uni: "", ind: "", view: "scatter", rankKey: "mcap", rankMode: "none", rankN: 30, neutral: false, step: 5, count: 12, codes: "" };
+  const EX = Object.assign({}, EX_DEF, LS.get("stockrank-explore", {}), { scan: null, hz: null, matrix: null });
   const EX_PRESETS = [
-    ["ret", "dd", "騰落率 × 調整の深さ"], ["buyChg", "fret", "買残の増加 → その後の騰落"], ["volRatio", "fret", "出来高の増え方 → その後の騰落"],
-    ["ratio", "fdd", "信用倍率 → その後の下げ"], ["buyPnl", "fret", "買い方の損益 → その後の騰落"], ["dd", "fret", "調整の深さ → その後の騰落"],
+    ["n か月の騰落 × 調整の深さ", { x: "ret", y: "dd", view: "scatter" }],
+    ["買残の増加 → その後の騰落", { x: "buyChg", y: "fret", view: "scatter" }],
+    ["出来高の増え方 → その後の騰落", { x: "volRatio", y: "fret", view: "scatter" }],
+    ["信用倍率 → その後の下げ", { x: "ratio", y: "fdd", view: "scatter" }],
+    ["PBR × ROE", { x: "pbr", y: "roe", view: "scatter" }],
+    ["モメンタム(12-1) → その後の超過", { x: "mom12_1", y: "fexcess", view: "scatter" }],
+    ["軌跡: 買い方損益 → その後の騰落", { x: "buyPnl", y: "fret", view: "trail", m: 0.25, step: 5, count: 12 }],
+    ["軌跡: 騰落 × 出来高の増え方", { x: "volRatioN", y: "ret", view: "trail", n: 0.25, step: 5, count: 12 }],
+    ["RRG(相対回転グラフ)", { x: "rsRatio", y: "rsMom", view: "trail", step: 5, count: 10 }],
   ];
+  const EX_PERIODS = [0.25, 0.5, 1, 3, 6, 12];
   const fmtNum = (v) => (v >= 1000 ? Math.round(v).toLocaleString("ja-JP") : v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toPrecision(2));
-  const exMetricText = (k) => SRExplore.byKey[k].label.replace(/(^| )n か月/g, `$1${EX.n}か月`).replace(/(^| )m か月/g, `$1${EX.m}か月`);
+  const exMetricText = (k) => SRExplore.byKey[k].label.replace(/(^| )n か月/g, `$1${SRExplore.periodLabel(EX.n)}`).replace(/(^| )m か月/g, `$1${SRExplore.periodLabel(EX.m)}`);
+  // 図の値(対数目盛は log10、業種中立は 0〜1 の順位)を表示用の文字に
+  const exFmt = (M, v, neutral) => { if (v === null || v === undefined) return "—"; if (neutral) return `${Math.round(v * 100)}位%`; const raw = M.log ? 10 ** v : v; return M.pct ? `${(raw * 100).toFixed(Math.abs(raw) < 0.1 ? 1 : 0)}%` : M.log ? fmtNum(raw) : Math.abs(raw) >= 100 ? raw.toFixed(0) : raw.toFixed(2); };
+  const exSave = () => { const o = {}; Object.keys(EX_DEF).forEach((k) => { o[k] = EX[k]; }); LS.set("stockrank-explore", o); };
   function exStocks() {
-    return S.rank.map((x) => { const c = S.rankData.charts[x.code]; return c && c.prices.length ? { code: x.code, name: x.name, industry: x.industry, prices: c.prices, dailyFrom: c.dailyFrom, credit: x.rows, shares: x.shares } : null; }).filter(Boolean);
+    return S.rank.map((x) => { const c = S.rankData.charts[x.code], d = S.rankData.details[x.code]; return c && c.prices.length ? { code: x.code, name: x.name, industry: x.industry, prices: c.prices, dailyFrom: c.dailyFrom, credit: x.rows, shares: x.shares, fund: d?.fund || null, inst: S.exInst?.get(x.code) || null } : null; }).filter(Boolean);
   }
-  // 基準日の列。「その後」の指標を使うときは、その後の m か月がそろう日までにする
-  function exDates(stocks) {
-    const X = SRExplore.byKey[EX.x], Y = SRExplore.byKey[EX.y];
-    const tpx = idxRows("TPX").map((r) => r.d); const lastDate = tpx.at(-1) || stocks[0]?.prices.at(-1)?.d;
-    const fut = X.future || Y.future; const lim = fut ? SRCal.add(lastDate, -Math.ceil(EX.m * 30.44) - 3) : lastDate;
+  // 機関の需給(銘柄ごとのファイル約400)を読む。読み終わるまでは「機関の需給」の指標は空
+  async function loadExInst() {
+    if (S.exInst) return; S.exInst = new Map();
+    const codes = S.preds.map((r) => r.code); let i = 0;
+    await Promise.all(Array.from({ length: 8 }, async () => { while (i < codes.length) { const c = codes[i++]; const x = await SRData.own(`inst/stocks/${c}`).catch(() => null); if (x) S.exInst.set(c, x); } }));
+    const all = [...S.exInst.values()];
+    const minDate = (k) => all.flatMap((x) => (x[k] || []).map((r) => r.date)).sort()[0] || "9999";
+    const since = minDate("shorts"), bbSince = minDate("buyback");
+    all.forEach((x) => { x.since = since; x.buybackSince = bbSince; });
+    (S.exStocks || []).forEach((s) => { s.inst = S.exInst.get(s.code) || null; s._mk = null; });
+  }
+  const exMkt = () => idxRows("TPX").map((r) => ({ d: r.d, c: r.c }));
+  // 基準日の最後の日(「その後」の指標を使うときは、その後の m か月がそろう日まで)
+  function exLastDate() {
+    const tpx = idxRows("TPX").map((r) => r.d); const lastDate = tpx.at(-1);
+    const fut = SRExplore.byKey[EX.x].future || SRExplore.byKey[EX.y].future;
+    const lim = fut ? SRCal.add(lastDate, -Math.ceil(EX.m * 30.44) + 3) : lastDate;
+    let i = tpx.length - 1; while (i > 0 && tpx[i] > lim) i--; return { tpx, last: tpx[i] };
+  }
+  function exDates() {
+    const { tpx, last } = exLastDate();
     const snap = (d) => { let i = tpx.length - 1; while (i > 0 && tpx[i] > d) i--; return tpx[i] || d; };
-    if (EX.uni) { const s = stocks.find((x) => x.code === EX.uni); return s ? SRExplore.weeklyDates(s).filter((d) => d <= lim) : []; }
-    if (EX.base === "latest") return [snap(lim)];
+    if (EX.uni) { const s = S.exStocks.find((x) => x.code === EX.uni); return s ? SRExplore.weeklyDates(s).filter((d) => d <= last) : []; }
+    if (EX.base === "latest") return [last];
     const months = EX.base === "m12" ? 12 : EX.base === "m60" ? 60 : 24;
-    return SRExplore.monthlyDates(lim, months).map(snap).filter((d, i, a) => a.indexOf(d) === i);
+    return SRExplore.monthlyDates(last, months).map(snap).filter((d, i, a) => a.indexOf(d) === i);
   }
+  // 業種・上位/下位 N で絞った点。group: "top" | "bottom" | ""
+  function exPoints(dates, xKey = EX.x, yKey = EX.y) {
+    const mkt = exMkt(); const base = S.exStocks.filter((x) => (EX.uni ? x.code === EX.uni : !EX.ind || x.industry === EX.ind));
+    let pts = dates.flatMap((T) => {
+      let stocks = base; let pick = null;
+      if (!EX.uni && EX.rankMode !== "none") { pick = SRExplore.pickRank(base, T, EX.rankKey, EX.rankN, EX.rankMode, EX.n, EX.m, mkt); stocks = base.filter((s) => pick.has(s.code)); }
+      return SRExplore.points(stocks, T, xKey, yKey, EX.n, EX.m, { mkt }).map((p) => ({ ...p, group: pick?.get(p.code) || "" }));
+    });
+    if (EX.neutral && !EX.uni) pts = SRExplore.neutralize(pts);
+    return { pts, stocks: base, mkt };
+  }
+
   async function renderExplore() {
     const ctl = $("#exControls"), body = $("#exBody");
     if (!S.rank) {
-      body.innerHTML = '<p class="muted pad">全銘柄の株価と信用残を読み込んでいます…(ランキングと同じデータ。初回は十数MBの復号があります)</p>';
+      body.innerHTML = '<p class="muted pad">全銘柄の株価・信用残・業績を読み込んでいます…(ランキングと同じデータ。初回は十数MBの復号があります)</p>';
       try { S.rankData = await loadRankData($("#exProgress")); S.rank = computeRank(S.rankData); } catch (e) { body.innerHTML = `<p class="pad">読み込めませんでした: ${esc(e.message)}</p>`; return; }
     }
     if (!S.exStocks) S.exStocks = exStocks();
-    const groups = [...new Set(SRExplore.METRICS.map((m) => m.group))];
-    const opts = (cur) => groups.map((g) => `<optgroup label="${esc(g)}">${SRExplore.METRICS.filter((m) => m.group === g).map((m) => `<option value="${m.key}" ${m.key === cur ? "selected" : ""}>${esc(exMetricText(m.key))}</option>`).join("")}</optgroup>`).join("");
+    if (!S.exInst) loadExInst().then(() => { if (S.view === "explore" && ["機関の需給"].some((g) => [EX.x, EX.y, EX.rankKey].some((k) => SRExplore.byKey[k].group === g))) renderExplore(); });
+    const M = SRExplore.METRICS; const groups = [...new Set(M.map((m) => m.group))];
+    const opts = (cur, noFuture) => groups.map((g) => { const list = M.filter((m) => m.group === g && !(noFuture && m.future)); return list.length ? `<optgroup label="${esc(g)}">${list.map((m) => `<option value="${m.key}" ${m.key === cur ? "selected" : ""}>${esc(exMetricText(m.key))}</option>`).join("")}</optgroup>` : ""; }).join("");
     const inds = [...new Set(S.exStocks.map((x) => x.industry).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja"));
-    ctl.innerHTML = `<div class="ex-presets">${EX_PRESETS.map(([x, y, l]) => `<button type="button" class="ex-preset ${EX.x === x && EX.y === y ? "active" : ""}" data-ex-preset="${x},${y}">${esc(l)}</button>`).join("")}</div>
-      <div class="ex-axes">
+    const per = (attr, cur, list) => seg(list.map((v) => [String(v), SRExplore.periodLabel(v)]), String(cur), attr);
+    const isPreset = (o) => Object.entries(o).every(([k, v]) => EX[k] === v);
+    ctl.innerHTML = `${seg([["scatter", "散布図"], ["trail", "軌跡(銘柄ごとにつなぐ)"], ["matrix", "相関の表(全指標)"]], EX.view, "ex-view")}
+      <div class="ex-presets">${EX_PRESETS.map(([l, o], i) => `<button type="button" class="ex-preset ${isPreset(o) ? "active" : ""}" data-ex-preset="${i}">${esc(l)}</button>`).join("")}</div>
+      ${EX.view === "matrix" ? "" : `<div class="ex-axes">
         <label><span>横軸 X</span><select id="exX">${opts(EX.x)}</select></label>
         <button type="button" class="btn" id="exSwap" title="X と Y を入れ替え">⇄</button>
         <label><span>縦軸 Y</span><select id="exY">${opts(EX.y)}</select></label>
+      </div>`}
+      <div class="ex-params">
+        <label><span>n(過去の期間)</span>${per("ex-n", EX.n, EX_PERIODS)}</label>
+        <label><span>m(その後の期間)</span>${per("ex-m", EX.m, EX_PERIODS.slice(0, 5))}</label>
+        ${EX.view === "trail" ? `<label><span>点の間隔</span>${seg([["5", "5日"], ["10", "10日"], ["21", "1か月"], ["63", "3か月"]], String(EX.step), "ex-step")}</label>
+          <label><span>点の数</span>${seg([["6", "6"], ["12", "12"], ["24", "24"]], String(EX.count), "ex-count")}</label>`
+        : `<label><span>基準日</span>${seg([["latest", "最新の1日"], ["m12", "毎月末×1年"], ["m24", "毎月末×2年"], ["m60", "毎月末×5年"]], EX.base, "ex-base")}</label>`}
       </div>
       <div class="ex-params">
-        <label><span>n(過去の月数)</span>${seg([["1", "1か月"], ["3", "3か月"], ["6", "6か月"], ["12", "12か月"]], String(EX.n), "ex-n")}</label>
-        <label><span>m(その後の月数)</span>${seg([["1", "1か月"], ["3", "3か月"], ["6", "6か月"]], String(EX.m), "ex-m")}</label>
-        <label><span>基準日</span>${seg([["latest", "最新の1日"], ["m12", "毎月末×1年"], ["m24", "毎月末×2年"], ["m60", "毎月末×5年"]], EX.base, "ex-base")}</label>
-        <label><span>対象</span><select id="exInd"><option value="">全業種</option>${inds.map((x) => `<option ${x === EX.ind ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
-        <label><span>1銘柄の時系列</span><input id="exUni" list="exCodes" placeholder="コード(空=全銘柄)" value="${esc(EX.uni)}" size="12"><datalist id="exCodes">${S.exStocks.map((x) => `<option value="${esc(x.code)}">${esc(x.name || "")}</option>`).join("")}</datalist></label>
+        <label><span>業種</span><select id="exInd"><option value="">全業種</option>${inds.map((x) => `<option ${x === EX.ind ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+        <label><span>上位・下位で絞る</span><span class="ex-rank">${seg([["none", "絞らない"], ["top", "上位"], ["bottom", "下位"], ["both", "上位と下位"]], EX.rankMode, "ex-rmode")}
+          ${EX.rankMode === "none" ? "" : `<select id="exRankN">${[10, 20, 30, 50, 100].map((v) => `<option ${v === EX.rankN ? "selected" : ""}>${v}</option>`).join("")}</select><span class="muted">銘柄 ・ 並べる指標</span><select id="exRankKey">${opts(EX.rankKey, true)}</select>`}</span></label>
+        ${EX.view === "scatter" ? `<label class="chk"><input type="checkbox" id="exNeutral" ${EX.neutral ? "checked" : ""}> 業種の中の順位で比べる(業種中立)</label>
+          <label><span>1銘柄の時系列</span><input id="exUni" list="exCodes" placeholder="コード(空=全銘柄)" value="${esc(EX.uni)}" size="12"></label>` : ""}
+        ${EX.view === "trail" ? `<label><span>銘柄を足す(コードをカンマ区切り)</span><input id="exCodesIn" list="exCodes" placeholder="例 7203,6758" value="${esc(EX.codes)}" size="18"></label>` : ""}
+        <datalist id="exCodes">${S.exStocks.map((x) => `<option value="${esc(x.code)}">${esc(x.name || "")}</option>`).join("")}</datalist>
       </div>`;
-    const save = () => { LS.set("stockrank-explore", { x: EX.x, y: EX.y, n: EX.n, m: EX.m, base: EX.base, uni: EX.uni, ind: EX.ind }); };
-    const redo = () => { EX.scan = null; save(); renderExplore(); };
-    $$("[data-ex-preset]", ctl).forEach((b) => b.addEventListener("click", () => { [EX.x, EX.y] = b.dataset.exPreset.split(","); redo(); }));
-    $("#exX").addEventListener("change", (e) => { EX.x = e.target.value; save(); renderExplore(); });
-    $("#exY").addEventListener("change", (e) => { EX.y = e.target.value; redo(); });
-    $("#exSwap").addEventListener("click", () => { [EX.x, EX.y] = [EX.y, EX.x]; redo(); });
-    $$("[data-ex-n]", ctl).forEach((b) => b.addEventListener("click", () => { EX.n = Number(b.dataset.exN); redo(); }));
-    $$("[data-ex-m]", ctl).forEach((b) => b.addEventListener("click", () => { EX.m = Number(b.dataset.exM); redo(); }));
+    const redo = () => { EX.scan = null; EX.hz = null; EX.matrix = null; exSave(); renderExplore(); };
+    $$("[data-ex-view]", ctl).forEach((b) => b.addEventListener("click", () => { EX.view = b.dataset.exView; redo(); }));
+    $$("[data-ex-preset]", ctl).forEach((b) => b.addEventListener("click", () => { Object.assign(EX, EX_PRESETS[Number(b.dataset.exPreset)][1]); EX.uni = ""; redo(); }));
+    $("#exX")?.addEventListener("change", (e) => { EX.x = e.target.value; EX.hz = null; exSave(); renderExplore(); });
+    $("#exY")?.addEventListener("change", (e) => { EX.y = e.target.value; redo(); });
+    $("#exSwap")?.addEventListener("click", () => { [EX.x, EX.y] = [EX.y, EX.x]; redo(); });
+    [["n", "exN"], ["m", "exM"], ["step", "exStep"], ["count", "exCount"]].forEach(([k, a]) => $$(`[data-ex-${k}]`, ctl).forEach((b) => b.addEventListener("click", () => { EX[k] = Number(b.dataset[a]); redo(); })));
     $$("[data-ex-base]", ctl).forEach((b) => b.addEventListener("click", () => { EX.base = b.dataset.exBase; redo(); }));
+    $$("[data-ex-rmode]", ctl).forEach((b) => b.addEventListener("click", () => { EX.rankMode = b.dataset.exRmode; redo(); }));
+    $("#exRankN")?.addEventListener("change", (e) => { EX.rankN = Number(e.target.value); redo(); });
+    $("#exRankKey")?.addEventListener("change", (e) => { EX.rankKey = e.target.value; redo(); });
     $("#exInd").addEventListener("change", (e) => { EX.ind = e.target.value; redo(); });
-    $("#exUni").addEventListener("change", (e) => { const v = e.target.value.trim().toUpperCase(); EX.uni = S.exStocks.some((x) => x.code === v) ? v : ""; redo(); });
+    $("#exNeutral")?.addEventListener("change", (e) => { EX.neutral = e.target.checked; redo(); });
+    $("#exUni")?.addEventListener("change", (e) => { const v = e.target.value.trim().toUpperCase(); EX.uni = S.exStocks.some((x) => x.code === v) ? v : ""; redo(); });
+    $("#exCodesIn")?.addEventListener("change", (e) => { EX.codes = e.target.value.toUpperCase().replace(/[^0-9A-Z,]/g, ""); redo(); });
+    try {
+      if (EX.view === "trail") exTrail(body); else if (EX.view === "matrix") exMatrix(body); else exScatter(body);
+    } catch (e) { console.error(e); body.innerHTML = `<p class="pad">計算できませんでした: ${esc(e.message)}</p>`; }
+  }
+  const exFoot = '<p class="foot">相関があっても原因とは限りません(業種や相場全体の動きが両方を動かしていることがあります)。毎月の基準日を重ねると「その後 m」が隣の月どうしで重なるので点どうしが独立ではなく、|t| は実際より大きく出ます(目安は |t| が 2〜3 を超えるか、基準日ごとの相関が同じ向きにそろうか)。株価は分割調整済み、出来高は分割を反映、信用残は今の株数にそろえ、業績はその日までに発表された分だけを使います。「機関の需給」は取り始めてからの期間しか無いので、主に最新の基準日で使えます。2026-10-20 の JPX の訂正前の値は除いています。</p>';
+  const exR = (r) => (r === null || r === undefined ? "—" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}`);
+  const exStrength = (r) => { const a = Math.abs(r ?? 0); return a >= 0.5 ? "強い" : a >= 0.3 ? "中くらいの" : a >= 0.1 ? "弱い" : "ほとんど無い"; };
 
-    const stocks = S.exStocks.filter((x) => (EX.uni ? x.code === EX.uni : !EX.ind || x.industry === EX.ind));
-    const dates = exDates(S.exStocks);
-    const pts = dates.flatMap((T) => SRExplore.points(stocks, T, EX.x, EX.y, EX.n, EX.m));
-    const st = SRExplore.stats(pts);
-    const X = SRExplore.byKey[EX.x], Y = SRExplore.byKey[EX.y];
-    const fv = (M, v) => (M.pct ? `${(v * 100).toFixed(Math.abs(v) < 0.1 ? 1 : 0)}%` : M.log ? fmtNum(10 ** v) : v.toFixed(2));
-    const fr = (r) => (r === null || r === undefined ? "—" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}`);
-    const strength = (r) => { const a = Math.abs(r ?? 0); return a >= 0.5 ? "強い" : a >= 0.3 ? "中くらいの" : a >= 0.1 ? "弱い" : "ほとんど無い"; };
-    const multi = !EX.uni && dates.length > 1;
-    // 基準日ごとの相関(関係が毎回同じ向きかを見る)
-    const perDate = multi ? dates.map((T) => { const p = pts.filter((q) => q.T === T); const s1 = SRExplore.stats(p); return { T, rho: s1.rho ?? null, n: p.length }; }).filter((x) => x.rho !== null) : [];
-    const posShare = perDate.length ? perDate.filter((x) => x.rho > 0).length / perDate.length : null;
-    const head = st.n < 10 ? empty(`点が少なすぎます(${st.n}点)。${X.future || Y.future ? "「その後」の指標は、基準日の後に m か月分の株価が必要です。" : ""}対象・期間を広げてください。`) : `
+  // ---------- 散布図 ----------
+  function exScatter(body) {
+    const dates = exDates(); const { pts, stocks } = exPoints(dates);
+    const st = SRExplore.stats(pts); const X = SRExplore.byKey[EX.x], Y = SRExplore.byKey[EX.y];
+    const nz = EX.neutral && !EX.uni; const fx = (v) => exFmt(X, v, nz), fy = (v) => exFmt(Y, v, nz);
+    const multi = !EX.uni && dates.length > 1; const ic = multi ? SRExplore.icSeries(pts) : null;
+    const filt = EX.rankMode !== "none" && !EX.uni ? `${{ top: "上位", bottom: "下位", both: "上位と下位" }[EX.rankMode]} ${EX.rankN}銘柄(${esc(exMetricText(EX.rankKey))}で並べる)` : "";
+    const head = st.n < 10 ? empty(`点が少なすぎます(${st.n}点)。${X.future || Y.future ? "「その後」の指標は、基準日の後に m の期間の株価が必要です。" : ""}${[X, Y].some((M) => M.recent) ? "「機関の需給」は取り始めてからの期間しか無いので、基準日を「最新の1日」にしてください。" : ""}対象・期間を広げてください。`) : `
       <div class="cards ex-cards">
-        <article><span>順位相関(スピアマン ρ)</span><strong class="${cls(st.rho)}">${fr(st.rho)}</strong><em>${strength(st.rho)}${st.rho > 0 ? "正の" : st.rho < 0 ? "負の" : ""}相関 · |t| = ${st.t === null ? "—" : Math.abs(st.t).toFixed(1)}</em></article>
-        <article><span>相関係数(ピアソン r)</span><strong class="${cls(st.r)}">${fr(st.r)}</strong><em>上下1%を切り詰めて計算${X.log || Y.log ? " · 対数目盛の軸は log10 で計算" : ""}</em></article>
-        <article><span>点の数</span><strong>${st.n.toLocaleString("ja-JP")}</strong><em>${EX.uni ? `${esc(EX.uni)} の毎週 ${dates.length}回` : `${dates.length}回の基準日 × 最大 ${stocks.length}銘柄`}</em></article>
-        ${multi ? `<article><span>基準日ごとに見ると</span><strong>${Math.round(posShare * 100)}%</strong><em>${perDate.length}回のうち ρ がプラスだった割合</em></article>` : `<article><span>基準日</span><strong class="ex-date">${esc(dates.at(-1) || "—")}</strong><em>${X.future || Y.future ? `その後 ${EX.m}か月がそろう最新の日` : "最新のデータの日"}</em></article>`}
+        <article><span>順位相関(スピアマン ρ)</span><strong class="${cls(st.rho)}">${exR(st.rho)}</strong><em>${exStrength(st.rho)}${st.rho > 0 ? "正の" : st.rho < 0 ? "負の" : ""}相関 · |t| = ${st.t === null ? "—" : Math.abs(st.t).toFixed(1)}</em></article>
+        <article><span>相関係数(ピアソン r)</span><strong class="${cls(st.r)}">${exR(st.r)}</strong><em>上下1%を切り詰めて計算${nz ? " · 業種の中の順位どうし" : X.log || Y.log ? " · 対数目盛の軸は log10 で計算" : ""}</em></article>
+        <article><span>点の数</span><strong>${st.n.toLocaleString("ja-JP")}</strong><em>${EX.uni ? `${esc(EX.uni)} の毎週 ${dates.length}回` : `${dates.length}回の基準日 × ${filt || `最大 ${stocks.length}銘柄`}`}</em></article>
+        ${ic?.n ? `<article><span>IC(基準日ごとの ρ の平均)</span><strong class="${cls(ic.mean)}">${exR(ic.mean)}</strong><em>プラスの回 ${Math.round(ic.hit * 100)}% · IC÷ばらつき(IR) ${ic.ir === null ? "—" : ic.ir.toFixed(2)}</em></article>
+          <article><span>上位20% − 下位20% の Y の平均の差</span><strong class="${cls(ic.spread)}">${Y.pct && !nz && !Y.log ? pct(ic.spread) : ic.spread.toFixed(3)}</strong><em>基準日ごとに X で並べた両端の差の平均</em></article>`
+        : `<article><span>基準日</span><strong class="ex-date">${esc(dates.at(-1) || "—")}</strong><em>${X.future || Y.future ? `その後 ${SRExplore.periodLabel(EX.m)}がそろう最新の日` : "最新のデータの日"}</em></article>`}
       </div>`;
+    const legend = `<b class="ex-key fit">━</b> 回帰直線 <b class="ex-key bins">●━</b> X を10等分した区間ごとの Y の中央値${EX.rankMode === "both" && !EX.uni ? ' <b class="ex-key top">●</b> 上位 <b class="ex-key bottom">●</b> 下位' : ""}。${multi ? "色が濃いほど新しい基準日。" : ""}★ = お気に入り・売買を記録した銘柄`;
+    const lastT = dates.at(-1); const lastPts = pts.filter((p) => p.T === lastT).sort((a, b) => b.x - a.x);
     body.innerHTML = `${head}
-      <section class="panel"><div class="row-head"><h3>${esc(exMetricText(EX.y))} <small>(縦)</small> × ${esc(exMetricText(EX.x))} <small>(横)</small></h3><small>点を押すとその銘柄のチャートへ。<b class="ex-key fit">━</b> 回帰直線 <b class="ex-key bins">●━</b> X を10等分した区間ごとの Y の中央値(曲がった関係も見える)。${multi ? "色が濃いほど新しい基準日。" : ""}★ = お気に入り・売買を記録した銘柄</small></div>
+      <section class="panel"><div class="row-head"><h3>${esc(exMetricText(EX.y))} <small>(縦)</small> × ${esc(exMetricText(EX.x))} <small>(横)</small></h3><small>点を押すとその銘柄のチャートへ。${legend}</small></div>
         <div id="exPlot" class="ex-plot"></div></section>
       ${st.quintiles ? `<section class="panel"><div class="row-head"><h3>X の大きさで5つに分けたときの Y</h3><small>相関係数は「直線的な関係」しか測れません。端の組だけ違う、真ん中だけ違う、のような形はこの表で見ます</small></div>
-        <div class="table-wrap"><table class="grid"><thead><tr><th>X の組</th><th>X の範囲</th><th>点の数</th><th>Y の平均</th><th>Y の中央値</th><th>Y がプラスの割合</th></tr></thead><tbody>${st.quintiles.map((q) => `<tr><th>${["小さい 20%", "やや小さい", "真ん中", "やや大きい", "大きい 20%"][q.k - 1]}</th><td>${fv(X, q.xMin)} 〜 ${fv(X, q.xMax)}</td><td>${q.n}</td><td>${Y.pct ? pctCell(q.mean) : fv(Y, q.mean)}</td><td>${Y.pct ? pctCell(q.median) : fv(Y, q.median)}</td><td><span class="ex-bar"><i style="width:${Math.round(q.pos * 100)}%"></i></span>${Math.round(q.pos * 100)}%</td></tr>`).join("")}</tbody></table></div></section>` : ""}
-      ${perDate.length > 2 ? `<section class="panel"><div class="row-head"><h3>基準日ごとの順位相関 ρ</h3><small>毎回同じ向きなら関係は安定、プラスとマイナスを行き来するなら偶然や相場つきの影響が大きい</small></div><div id="exPerDate" class="ex-perdate"></div></section>` : ""}
+        <div class="table-wrap"><table class="grid"><thead><tr><th>X の組</th><th>X の範囲</th><th>点の数</th><th>Y の平均</th><th>Y の中央値</th><th>Y がプラスの割合</th></tr></thead><tbody>${st.quintiles.map((q) => `<tr><th>${["小さい 20%", "やや小さい", "真ん中", "やや大きい", "大きい 20%"][q.k - 1]}</th><td>${fx(q.xMin)} 〜 ${fx(q.xMax)}</td><td>${q.n}</td><td>${Y.pct && !nz && !Y.log ? pctCell(q.mean) : fy(q.mean)}</td><td>${Y.pct && !nz && !Y.log ? pctCell(q.median) : fy(q.median)}</td><td><span class="ex-bar"><i style="width:${Math.round(q.pos * 100)}%"></i></span>${Math.round(q.pos * 100)}%</td></tr>`).join("")}</tbody></table></div></section>` : ""}
+      ${ic?.n > 2 ? `<section class="panel"><div class="row-head"><h3>基準日ごとの順位相関(IC)</h3><small>ファクター分析でよく使う見方。毎回同じ向きなら関係は安定、プラスとマイナスを行き来するなら偶然や相場つきの影響が大きい。IR(IC の平均 ÷ ばらつき)が 0.5 を超えると安定していると言われます</small></div><div id="exPerDate" class="ex-perdate"></div></section>` : ""}
+      ${Y.future && !EX.uni ? `<section class="panel"><div class="row-head"><h3>先の期間ごとの効き方(IC の減衰)</h3><small>同じ X で、Y の「その後」の期間を 1週〜6か月に変えたときの相関。どのくらい先まで効くか、すぐ消えるかを見ます</small></div><div id="exHz">${EX.hz ? exHzHtml(EX.hz, Y) : '<button type="button" class="btn" id="exHzBtn">計算する</button>'}</div></section>` : ""}
+      ${EX.uni && dates.length > 30 ? `<section class="panel"><div class="row-head"><h3>どちらが先に動くか(先行・遅行の相関)</h3><small>${esc(EX.uni)} の毎週の値で、今の X と k 週あとの Y の順位相関。右側(k &gt; 0)が高ければ X が先に動き、左側(k &lt; 0)なら Y が先</small></div><div id="exLag" class="ex-perdate"></div></section>` : ""}
       <section class="panel"><div class="row-head"><h3>「${esc(exMetricText(EX.y))}」と相関の強い指標を探す</h3><small>今の対象・基準日で、ほかの全部の指標との順位相関を計算して強い順に並べます。行を押すと横軸にします</small></div>
         <div id="exScan">${EX.scan ? exScanHtml(EX.scan) : '<button type="button" class="btn" id="exScanBtn">計算する</button>'}</div></section>
-      <p class="foot">相関があっても原因とは限りません(業種や相場全体の動きが両方を動かしていることがあります)。毎月の基準日を重ねると、「その後 m か月」が隣の月どうしで重なるので点どうしが独立ではなく、|t| は実際より大きく出ます(目安は |t| が 2〜3 を超えるか、基準日ごとの ρ が同じ向きにそろうか)。株価は分割調整済み、出来高は分割を反映、信用残は今の株数にそろえています。2026-10-20 の JPX の訂正前の値は除いています。</p>`;
-    exPlot(pts, st, X, Y, fv, multi ? dates : null);
-    if (perDate.length > 2) exPerDatePlot(perDate);
+      ${lastPts.length ? `<section class="panel"><div class="row-head"><h3>銘柄の一覧(基準日 ${esc(lastT)}・X の大きい順)</h3><small>${lastPts.length}銘柄${lastPts.length > 100 ? "のうち上下 50" : ""}。CSV には全部の基準日の点が入ります</small><button type="button" class="btn" id="exCsv">CSV を保存</button></div>
+        <div class="table-wrap tall"><table class="grid"><thead><tr><th>#</th><th>銘柄</th><th>業種</th><th>X: ${esc(exMetricText(EX.x))}</th><th>Y: ${esc(exMetricText(EX.y))}</th>${EX.rankMode !== "none" ? "<th>組</th>" : ""}</tr></thead><tbody>${(lastPts.length > 100 ? [...lastPts.slice(0, 50), null, ...lastPts.slice(-50)] : lastPts).map((p, i) => (p ? `<tr><td class="muted">${i < 50 || lastPts.length <= 100 ? i + 1 : lastPts.length - (100 - i)}</td><th><button type="button" class="link" data-code="${esc(p.code)}"><b>${esc(p.code)}</b> ${esc(p.name || "")}</button></th><td>${esc(p.industry || "")}</td><td>${fx(p.x)}</td><td>${fy(p.y)}</td>${EX.rankMode !== "none" ? `<td class="${p.group === "top" ? "up" : "down"}">${p.group === "top" ? "上位" : p.group === "bottom" ? "下位" : ""}</td>` : ""}</tr>` : '<tr><td colspan="6" class="muted">…</td></tr>')).join("")}</tbody></table></div></section>` : ""}
+      ${exFoot}`;
+    exPlot(pts, st, X, Y, fx, fy, multi ? dates : null, nz);
+    if (ic?.n > 2) exBars($("#exPerDate"), ic.list.map((x) => ({ label: x.T.slice(2, 7).replace("-", "/"), v: x.ic, title: `${x.T} IC=${x.ic.toFixed(2)}(${x.n}銘柄)` })));
+    if ($("#exLag")) { const s = S.exStocks.find((x) => x.code === EX.uni); const ll = SRExplore.leadLag(s, dates, EX.x, EX.y, EX.n, EX.m, 12, { mkt: exMkt() }); exBars($("#exLag"), ll.filter((x) => x.rho !== null).map((x) => ({ label: `${x.k > 0 ? "+" : ""}${x.k}週`, v: x.rho, title: `k=${x.k}週 ρ=${x.rho.toFixed(2)}(${x.n}点)` }))); }
     $("#exScanBtn")?.addEventListener("click", () => {
       $("#exScan").innerHTML = '<p class="muted">計算中…</p>';
-      setTimeout(() => { EX.scan = SRExplore.scan(stocks, dates, EX.y, EX.n, EX.m); $("#exScan").innerHTML = exScanHtml(EX.scan); bindScan(); }, 30);
+      setTimeout(() => { const base = S.exStocks.filter((x) => (EX.uni ? x.code === EX.uni : !EX.ind || x.industry === EX.ind)); EX.scan = SRExplore.scan(base, dates, EX.y, EX.n, EX.m, { mkt: exMkt(), neutral: nz }); $("#exScan").innerHTML = exScanHtml(EX.scan); bindScan(); }, 30);
     });
-    const bindScan = () => $$("[data-ex-x]", body).forEach((b) => b.addEventListener("click", () => { EX.x = b.dataset.exX; save(); renderExplore(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
+    $("#exHzBtn")?.addEventListener("click", () => {
+      $("#exHz").innerHTML = '<p class="muted">計算中…</p>';
+      setTimeout(() => { const base = S.exStocks.filter((x) => !EX.ind || x.industry === EX.ind); const tpx = idxRows("TPX").map((r) => r.d); EX.hz = SRExplore.horizons(base, dates.filter((d) => d <= SRCal.add(tpx.at(-1), -190)), EX.x, EX.y, EX.n, [0.25, 0.5, 1, 3, 6], { mkt: exMkt(), neutral: nz }); $("#exHz").innerHTML = exHzHtml(EX.hz, Y); }, 30);
+    });
+    $("#exCsv")?.addEventListener("click", () => { const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`; const raw = (M, v) => (nz ? v : M.log ? 10 ** v : v); download(`explore_${EX.x}_${EX.y}.csv`, ["基準日,コード,銘柄,業種,X,Y,組", ...pts.map((p) => [p.T, p.code, q(p.name), q(p.industry), raw(X, p.x), raw(Y, p.y), p.group || ""].join(","))].join("\n")); });
+    $$("[data-code]", body).forEach((b) => b.addEventListener("click", () => goChart(b.dataset.code)));
+    const bindScan = () => $$("[data-ex-x]", body).forEach((b) => b.addEventListener("click", () => { EX.x = b.dataset.exX; EX.hz = null; exSave(); renderExplore(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
     bindScan();
   }
   function exScanHtml(list) {
-    const fr = (r) => (r === null ? "—" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}`);
-    return `<div class="table-wrap"><table class="grid"><thead><tr><th>指標(X)</th><th>順位相関 ρ</th><th></th><th>ピアソン r</th><th>点の数</th></tr></thead><tbody>${list.map((x) => `<tr class="${x.key === EX.x ? "sel" : ""}"><th><button type="button" class="link" data-ex-x="${x.key}">${esc(exMetricText(x.key))}</button><small>${esc(x.group)}</small></th><td class="${cls(x.rho)}">${fr(x.rho)}</td><td><span class="ex-rbar ${x.rho < 0 ? "neg" : ""}"><i style="width:${Math.round(Math.min(1, Math.abs(x.rho ?? 0)) * 100)}%"></i></span></td><td>${fr(x.r)}</td><td>${x.n}</td></tr>`).join("")}</tbody></table></div>`;
+    const ic = list.some((x) => x.icMean !== null);
+    return `<div class="table-wrap"><table class="grid"><thead><tr><th>指標(X)</th><th>順位相関 ρ</th><th></th><th>ピアソン r</th>${ic ? "<th>IC 平均</th><th>IC プラスの回</th>" : ""}<th>点の数</th></tr></thead><tbody>${list.map((x) => `<tr class="${x.key === EX.x ? "sel" : ""}"><th><button type="button" class="link" data-ex-x="${x.key}">${esc(exMetricText(x.key))}</button><small>${esc(x.group)}</small></th><td class="${cls(x.rho)}">${exR(x.rho)}</td><td><span class="ex-rbar ${x.rho < 0 ? "neg" : ""}"><i style="width:${Math.round(Math.min(1, Math.abs(x.rho ?? 0)) * 100)}%"></i></span></td><td>${exR(x.r)}</td>${ic ? `<td class="${cls(x.icMean)}">${exR(x.icMean)}</td><td>${x.hit === null ? "—" : `${Math.round(x.hit * 100)}%`}</td>` : ""}<td>${x.n}</td></tr>`).join("")}</tbody></table></div>`;
   }
-  // 散布図(SVG)。軸の範囲は上下 1% を除いた範囲にし、はみ出す点は縁に寄せて白抜きで描く
-  function exPlot(pts, st, X, Y, fv, dates) {
+  function exHzHtml(list, Y) {
+    return `<div class="table-wrap"><table class="grid"><thead><tr><th>その後の期間</th><th>順位相関 ρ</th><th>IC 平均</th><th>IC プラスの回</th><th>上位20% − 下位20%</th><th>点の数</th></tr></thead><tbody>${list.map((x) => `<tr><th>${SRExplore.periodLabel(x.m)}</th><td class="${cls(x.rho)}">${exR(x.rho)}</td><td class="${cls(x.icMean)}">${exR(x.icMean)}</td><td>${x.hit === null ? "—" : `${Math.round(x.hit * 100)}%`}</td><td>${x.spread === null ? "—" : Y.pct && !EX.neutral ? pctCell(x.spread) : x.spread.toFixed(3)}</td><td>${x.n}</td></tr>`).join("")}</tbody></table></div><p class="foot">比べやすいように、基準日は6か月先までそろう日だけを使っています。</p>`;
+  }
+  // 図の軸の範囲・目盛り(上下 1% を除いた範囲)
+  function exAxes(xs, ys, W, H, M) {
+    const q = (a, p) => { const s = a.slice().sort((u, v) => u - v); return s[Math.round(p * (s.length - 1))]; };
+    const dom = (a, p) => { let lo = q(a, p), hi = q(a, 1 - p); if (lo === hi) { lo -= 1e-9 + Math.abs(lo) * 0.1; hi += 1e-9 + Math.abs(hi) * 0.1; } const pad = (hi - lo) * 0.05; return [lo - pad, hi + pad]; };
+    const p = xs.length > 200 ? 0.01 : 0; const [x0, x1] = dom(xs, p), [y0, y1] = dom(ys, p);
+    const sx = (v) => M.l + (Math.min(x1, Math.max(x0, v)) - x0) / (x1 - x0) * (W - M.l - M.r), sy = (v) => H - M.b - (Math.min(y1, Math.max(y0, v)) - y0) / (y1 - y0) * (H - M.t - M.b);
+    const ticks = (lo, hi) => { const step0 = (hi - lo) / 5; const mag = 10 ** Math.floor(Math.log10(step0)); const step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((k) => k >= step0); const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toPrecision(10)); return out; };
+    return { x0, x1, y0, y1, sx, sy, ticks };
+  }
+  // 基準線(0%・倍率 1・RS 100 など)。業種中立なら真ん中(0.5)
+  const exCenter = (Mt, nz) => (nz ? 0.5 : Mt.center !== undefined ? (Mt.log ? Math.log10(Mt.center) : Mt.center) : Mt.pct && !Mt.log ? 0 : null);
+  function exGridSvg(A, X, Y, fx, fy, W, H, M, nz) {
+    const cx = exCenter(X, nz), cy = exCenter(Y, nz);
+    return `${A.ticks(A.x0, A.x1).map((v) => `<line x1="${A.sx(v)}" x2="${A.sx(v)}" y1="${M.t}" y2="${H - M.b}" class="ex-grid"/><text x="${A.sx(v)}" y="${H - M.b + 16}" text-anchor="middle">${esc(fx(v))}</text>`).join("")}
+      ${A.ticks(A.y0, A.y1).map((v) => `<line x1="${M.l}" x2="${W - M.r}" y1="${A.sy(v)}" y2="${A.sy(v)}" class="ex-grid"/><text x="${M.l - 6}" y="${A.sy(v) + 4}" text-anchor="end">${esc(fy(v))}</text>`).join("")}
+      ${cx !== null && cx > A.x0 && cx < A.x1 ? `<line x1="${A.sx(cx)}" x2="${A.sx(cx)}" y1="${M.t}" y2="${H - M.b}" class="ex-zero"/>` : ""}${cy !== null && cy > A.y0 && cy < A.y1 ? `<line x1="${M.l}" x2="${W - M.r}" y1="${A.sy(cy)}" y2="${A.sy(cy)}" class="ex-zero"/>` : ""}`;
+  }
+  // 散布図(SVG)。はみ出す点は縁に寄せて白抜きで描く
+  function exPlot(pts, st, X, Y, fx, fy, dates, nz) {
     const box = $("#exPlot"); if (!box) return;
     const W = Math.max(300, box.clientWidth), H = isNarrow() ? 300 : 440; const M = { l: 54, r: 12, t: 10, b: 30 };
     if (!pts.length) { box.innerHTML = ""; return; }
-    const q = (a, p) => { const s = a.slice().sort((u, v) => u - v); return s[Math.round(p * (s.length - 1))]; };
-    const dom = (a) => { let lo = q(a, 0.01), hi = q(a, 0.99); if (lo === hi) { lo -= 1e-9 + Math.abs(lo) * 0.1; hi += 1e-9 + Math.abs(hi) * 0.1; } const pad = (hi - lo) * 0.04; return [lo - pad, hi + pad]; };
-    const [x0, x1] = dom(pts.map((p) => p.x)), [y0, y1] = dom(pts.map((p) => p.y));
-    const sx = (v) => M.l + (Math.min(x1, Math.max(x0, v)) - x0) / (x1 - x0) * (W - M.l - M.r), sy = (v) => H - M.b - (Math.min(y1, Math.max(y0, v)) - y0) / (y1 - y0) * (H - M.t - M.b);
-    const ticks = (lo, hi) => { const step0 = (hi - lo) / 5; const mag = 10 ** Math.floor(Math.log10(step0)); const step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((k) => k >= step0); const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toPrecision(10)); return out; };
+    const A = exAxes(pts.map((p) => p.x), pts.map((p) => p.y), W, H, M);
     const mine = new Set([...S.favs, ...S.trades.map((t) => t.code)]);
     const dIdx = dates ? new Map(dates.map((d, i) => [d, i])) : null;
-    const accent = css("--accent") || "#2962ff", warn = css("--warn") || "#ff9800";
-    const zeroX = x0 < 0 && x1 > 0 && !X.log, zeroY = y0 < 0 && y1 > 0 && !Y.log;
-    const line = st.slope !== null && st.slope !== undefined ? `<line x1="${sx(x0)}" y1="${sy(st.intercept + st.slope * x0)}" x2="${sx(x1)}" y2="${sy(st.intercept + st.slope * x1)}" class="ex-fit"/>` : "";
+    const accent = css("--accent") || "#2962ff", warn = css("--warn") || "#ff9800", up = css("--up") || "#26a69a", dn = css("--down") || "#ef5350";
+    const line = st.slope !== null && st.slope !== undefined ? `<line x1="${A.sx(A.x0)}" y1="${A.sy(st.intercept + st.slope * A.x0)}" x2="${A.sx(A.x1)}" y2="${A.sy(st.intercept + st.slope * A.x1)}" class="ex-fit"/>` : "";
     const order = pts.map((p, i) => i).sort((a, b) => (mine.has(pts[a].code) ? 1 : 0) - (mine.has(pts[b].code) ? 1 : 0));
-    const binLine = st.bins?.length > 2 ? `<polyline points="${st.bins.map((b) => `${sx(b.x).toFixed(1)},${sy(b.y).toFixed(1)}`).join(" ")}" class="ex-bins"/>${st.bins.map((b) => `<circle cx="${sx(b.x).toFixed(1)}" cy="${sy(b.y).toFixed(1)}" r="3.5" class="ex-bindot"/>`).join("")}` : "";
-    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="ex-svg">
-      ${ticks(x0, x1).map((v) => `<line x1="${sx(v)}" x2="${sx(v)}" y1="${M.t}" y2="${H - M.b}" class="ex-grid"/><text x="${sx(v)}" y="${H - M.b + 16}" text-anchor="middle">${esc(fv(X, v))}</text>`).join("")}
-      ${ticks(y0, y1).map((v) => `<line x1="${M.l}" x2="${W - M.r}" y1="${sy(v)}" y2="${sy(v)}" class="ex-grid"/><text x="${M.l - 6}" y="${sy(v) + 4}" text-anchor="end">${esc(fv(Y, v))}</text>`).join("")}
-      ${zeroX ? `<line x1="${sx(0)}" x2="${sx(0)}" y1="${M.t}" y2="${H - M.b}" class="ex-zero"/>` : ""}${zeroY ? `<line x1="${M.l}" x2="${W - M.r}" y1="${sy(0)}" y2="${sy(0)}" class="ex-zero"/>` : ""}
-      <g>${order.map((i) => { const p = pts[i]; const out = p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1; const my = mine.has(p.code); const op = dIdx ? 0.18 + 0.62 * (dIdx.get(p.T) / Math.max(1, dates.length - 1)) : 0.55; return `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${my ? 4 : 2.6}" fill="${out ? "none" : my ? warn : accent}" stroke="${out || my ? (my ? warn : accent) : "none"}" fill-opacity="${my ? 0.95 : op.toFixed(2)}" data-i="${i}"/>`; }).join("")}</g>
+    const binLine = st.bins?.length > 2 ? `<polyline points="${st.bins.map((b) => `${A.sx(b.x).toFixed(1)},${A.sy(b.y).toFixed(1)}`).join(" ")}" class="ex-bins"/>${st.bins.map((b) => `<circle cx="${A.sx(b.x).toFixed(1)}" cy="${A.sy(b.y).toFixed(1)}" r="3.5" class="ex-bindot"/>`).join("")}` : "";
+    const both = EX.rankMode === "both";
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="ex-svg">${exGridSvg(A, X, Y, fx, fy, W, H, M, nz)}
+      <g>${order.map((i) => { const p = pts[i]; const out = p.x < A.x0 || p.x > A.x1 || p.y < A.y0 || p.y > A.y1; const my = mine.has(p.code); const col = my ? warn : both && p.group === "top" ? up : both && p.group === "bottom" ? dn : accent; const op = dIdx ? 0.18 + 0.62 * (dIdx.get(p.T) / Math.max(1, dates.length - 1)) : pts.length < 300 ? 0.8 : 0.55; return `<circle cx="${A.sx(p.x).toFixed(1)}" cy="${A.sy(p.y).toFixed(1)}" r="${my ? 4 : pts.length < 300 ? 3.5 : 2.6}" fill="${out ? "none" : col}" stroke="${out || my ? col : "none"}" fill-opacity="${my ? 0.95 : op.toFixed(2)}"/>`; }).join("")}</g>
       ${line}${binLine}</svg><div class="ex-tip" hidden></div>`;
+    exHover(box, W, H, pts.map((p) => ({ px: A.sx(p.x), py: A.sy(p.y), code: p.code, html: `<b>${esc(p.code)} ${esc(p.name || "")}</b><small>${esc(p.industry || "")} · 基準日 ${esc(p.T)}</small><span>X ${esc(fx(p.x))} · Y ${esc(fy(p.y))}</span>` })));
+  }
+  // 図の上の近い点を探して吹き出しを出す・押すとチャートへ
+  function exHover(box, W, H, list) {
     const svg = $("svg", box), tip = $(".ex-tip", box);
-    const near = (e) => { const r = svg.getBoundingClientRect(); const mx = (e.clientX - r.left) * W / r.width, my = (e.clientY - r.top) * H / r.height; let best = null, bd = 144; pts.forEach((p, i) => { const d = (sx(p.x) - mx) ** 2 + (sy(p.y) - my) ** 2; if (d < bd) { bd = d; best = i; } }); return best; };
+    const near = (e) => { const r = svg.getBoundingClientRect(); const mx = (e.clientX - r.left) * W / r.width, my = (e.clientY - r.top) * H / r.height; let best = null, bd = 144; list.forEach((p, i) => { const d = (p.px - mx) ** 2 + (p.py - my) ** 2; if (d < bd) { bd = d; best = i; } }); return best; };
     svg.addEventListener("mousemove", (e) => {
       const i = near(e); if (i === null) { tip.hidden = true; return; }
-      const p = pts[i]; tip.hidden = false;
-      tip.innerHTML = `<b>${esc(p.code)} ${esc(p.name || "")}</b><small>${esc(p.industry || "")} · 基準日 ${esc(p.T)}</small><span>X ${esc(fv(X, p.x))} · Y ${esc(fv(Y, p.y))}</span>`;
-      const br = box.getBoundingClientRect(); tip.style.left = `${Math.min(e.clientX - br.left + 12, br.width - 200)}px`; tip.style.top = `${e.clientY - br.top + 12}px`;
+      tip.hidden = false; tip.innerHTML = list[i].html;
+      const br = box.getBoundingClientRect(); tip.style.left = `${Math.max(0, Math.min(e.clientX - br.left + 12, br.width - 220))}px`; tip.style.top = `${e.clientY - br.top + 12}px`;
     });
     svg.addEventListener("mouseleave", () => { tip.hidden = true; });
-    svg.addEventListener("click", (e) => { const i = near(e); if (i !== null) goChart(pts[i].code); });
+    svg.addEventListener("click", (e) => { const i = near(e); if (i !== null) goChart(list[i].code); });
   }
-  function exPerDatePlot(list) {
-    const box = $("#exPerDate"); const W = Math.max(300, box.clientWidth), H = 150, M = { l: 34, r: 8, t: 8, b: 22 };
-    const bw = (W - M.l - M.r) / list.length;
-    const lim = Math.max(0.3, ...list.map((x) => Math.abs(x.rho))); const sy2 = (v) => M.t + (lim - v) / (2 * lim) * (H - M.t - M.b);
+  // 棒グラフ(-1〜1 の相関など)
+  function exBars(box, list) {
+    if (!box || !list.length) return;
+    const W = Math.max(300, box.clientWidth), H = 150, M = { l: 34, r: 8, t: 8, b: 22 };
+    const bw = (W - M.l - M.r) / list.length; const lim = Math.max(0.3, ...list.map((x) => Math.abs(x.v))); const sy = (v) => M.t + (lim - v) / (2 * lim) * (H - M.t - M.b);
     const up = css("--up") || "#26a69a", dn = css("--down") || "#ef5350";
-    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="ex-svg">${[-lim, 0, lim].map((v) => `<line x1="${M.l}" x2="${W - M.r}" y1="${sy2(v)}" y2="${sy2(v)}" class="${v ? "ex-grid" : "ex-zero"}"/><text x="${M.l - 4}" y="${sy2(v) + 4}" text-anchor="end">${v.toFixed(2)}</text>`).join("")}
-      ${list.map((x, i) => `<rect x="${(M.l + i * bw + bw * 0.15).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" y="${Math.min(sy2(0), sy2(x.rho)).toFixed(1)}" height="${Math.abs(sy2(x.rho) - sy2(0)).toFixed(1)}" fill="${x.rho >= 0 ? up : dn}"><title>${x.T} ρ=${x.rho.toFixed(2)}(${x.n}銘柄)</title></rect>`).join("")}
-      ${list.map((x, i) => (i % Math.ceil(list.length / 8) === 0 ? `<text x="${M.l + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${x.T.slice(2, 7).replace("-", "/")}</text>` : "")).join("")}</svg>`;
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="ex-svg">${[-lim, 0, lim].map((v) => `<line x1="${M.l}" x2="${W - M.r}" y1="${sy(v)}" y2="${sy(v)}" class="${v ? "ex-grid" : "ex-zero"}"/><text x="${M.l - 4}" y="${sy(v) + 4}" text-anchor="end">${v.toFixed(2)}</text>`).join("")}
+      ${list.map((x, i) => `<rect x="${(M.l + i * bw + bw * 0.15).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" y="${Math.min(sy(0), sy(x.v)).toFixed(1)}" height="${Math.abs(sy(x.v) - sy(0)).toFixed(1)}" fill="${x.v >= 0 ? up : dn}"><title>${esc(x.title)}</title></rect>`).join("")}
+      ${list.map((x, i) => (i % Math.ceil(list.length / 8) === 0 ? `<text x="${M.l + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(x.label)}</text>` : "")).join("")}</svg>`;
+  }
+
+  // ---------- 軌跡(銘柄ごとに n 日おきの点をつなぐ) ----------
+  function exTrailStocks(last) {
+    const mkt = exMkt(); let base = S.exStocks.filter((x) => !EX.ind || x.industry === EX.ind); let pick = null;
+    const extra = EX.codes.split(",").filter(Boolean);
+    let list;
+    if (EX.rankMode !== "none") { pick = SRExplore.pickRank(base, last, EX.rankKey, EX.rankN, EX.rankMode, EX.n, EX.m, mkt); list = base.filter((s) => pick.has(s.code)); }
+    else if (extra.length) list = [];
+    else { const mine = new Set([...S.favs, ...S.trades.map((t) => t.code)]); list = base.filter((s) => mine.has(s.code)); if (!list.length) { pick = SRExplore.pickRank(base, last, "mcap", 15, "top", EX.n, EX.m, mkt); list = base.filter((s) => pick.has(s.code)); } }
+    extra.forEach((c) => { const s = S.exStocks.find((x) => x.code === c); if (s && !list.includes(s)) list.push(s); });
+    return { list: list.slice(0, 120), pick, mkt };
+  }
+  function exTrail(body) {
+    const { tpx, last } = exLastDate();
+    const dates = SRExplore.stepDates(tpx, EX.step, EX.count, last);
+    const { list, pick, mkt } = exTrailStocks(last);
+    const tr = SRExplore.trails(list, dates, EX.x, EX.y, EX.n, EX.m, { mkt });
+    const X = SRExplore.byKey[EX.x], Y = SRExplore.byKey[EX.y]; const fx = (v) => exFmt(X, v), fy = (v) => exFmt(Y, v);
+    const who = EX.rankMode !== "none" ? `${{ top: "上位", bottom: "下位", both: "上位と下位" }[EX.rankMode]} ${EX.rankN}銘柄(${esc(exMetricText(EX.rankKey))}・${esc(last)} 時点)` : EX.codes ? "指定した銘柄" : list.some((s) => S.favs.has(s.code) || S.trades.some((t) => t.code === s.code)) ? "お気に入り・売買を記録した銘柄" : "時価総額の上位 15銘柄";
+    const rrg = EX.x === "rsRatio" && EX.y === "rsMom";
+    body.innerHTML = `${tr.length ? "" : empty("描ける銘柄がありません。指標・期間・銘柄を変えてください。")}
+      <section class="panel"><div class="row-head"><h3>軌跡: ${esc(exMetricText(EX.y))} <small>(縦)</small> × ${esc(exMetricText(EX.x))} <small>(横)</small></h3><small>${who}。${esc(dates[0] || "")} 〜 ${esc(dates.at(-1) || "")} を ${EX.step}営業日おきに ${dates.length}点。線の太い先端(●と銘柄コード)が一番新しい点。点に触れると日付と値、押すとチャートへ</small></div>
+        <div id="exPlot" class="ex-plot"></div>
+        ${rrg ? '<p class="foot">RRG(Relative Rotation Graph): 右上 = 先行(TOPIX より強く、勢いも増している)→ 右下 = 失速 → 左下 = 出遅れ → 左上 = 改善 → 右上… と時計回りに回りやすい、という見方です。RS-Ratio・RS-Momentum は本家の非公開の式の近似です。</p>' : ""}</section>
+      ${tr.length ? `<section class="panel"><div class="row-head"><h3>銘柄ごとの最初と最後</h3><small>動いた向き(→)と距離。X・Y の変化を並べ替えに使えます</small></div>
+        <div class="table-wrap"><table class="grid"><thead><tr><th>銘柄</th><th>X 最初</th><th>X 最後</th><th>Y 最初</th><th>Y 最後</th><th>点</th>${pick ? "<th>組</th>" : ""}</tr></thead><tbody>${tr.map((x) => { const a = x.path[0], b = x.path.at(-1); return `<tr><th><button type="button" class="link" data-code="${esc(x.code)}"><b>${esc(x.code)}</b> ${esc(x.name || "")}</button><small>${esc(x.industry || "")}</small></th><td>${fx(a.x)}</td><td>${fx(b.x)}</td><td>${fy(a.y)}</td><td>${fy(b.y)}</td><td>${x.path.length}</td>${pick ? `<td class="${pick.get(x.code) === "top" ? "up" : "down"}">${pick.get(x.code) === "top" ? "上位" : pick.get(x.code) === "bottom" ? "下位" : ""}</td>` : ""}</tr>`; }).join("")}</tbody></table></div></section>` : ""}
+      ${exFoot}`;
+    if (!tr.length) return;
+    const box = $("#exPlot"); const W = Math.max(300, box.clientWidth), H = isNarrow() ? 340 : 520, M = { l: 54, r: 40, t: 10, b: 30 };
+    const all = tr.flatMap((x) => x.path); const A = exAxes(all.map((p) => p.x), all.map((p) => p.y), W, H, M);
+    const color = (i) => (pick && EX.rankMode === "both" ? (pick.get(tr[i].code) === "top" ? css("--up") : css("--down")) : `hsl(${(i * 137.5) % 360} 70% 50%)`);
+    const quad = rrg ? [["先行", W - M.r - 6, M.t + 14, "end"], ["失速", W - M.r - 6, H - M.b - 6, "end"], ["出遅れ", M.l + 6, H - M.b - 6, "start"], ["改善", M.l + 6, M.t + 14, "start"]].map(([l, x, y, a]) => `<text x="${x}" y="${y}" text-anchor="${a}" class="ex-quad">${l}</text>`).join("") : "";
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="ex-svg">${exGridSvg(A, X, Y, fx, fy, W, H, M, false)}${quad}
+      ${tr.map((x, i) => { const c = color(i); const ps = x.path.map((p) => [A.sx(p.x), A.sy(p.y)]); const segs = ps.slice(1).map((q, k) => `<line x1="${ps[k][0].toFixed(1)}" y1="${ps[k][1].toFixed(1)}" x2="${q[0].toFixed(1)}" y2="${q[1].toFixed(1)}" stroke="${c}" stroke-width="${(0.8 + 2 * (k + 1) / ps.length).toFixed(1)}" stroke-opacity="${(0.25 + 0.65 * (k + 1) / ps.length).toFixed(2)}"/>`).join(""); const h = ps.at(-1); return `<g class="ex-trail">${segs}${ps.slice(0, -1).map((q) => `<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="1.8" fill="${c}" fill-opacity=".5"/>`).join("")}<circle cx="${h[0].toFixed(1)}" cy="${h[1].toFixed(1)}" r="4.5" fill="${c}" stroke="var(--panel)" stroke-width="1.2"/><text x="${(h[0] + 6).toFixed(1)}" y="${(h[1] - 5).toFixed(1)}" class="ex-lbl" fill="${c}">${esc(x.code)}</text></g>`; }).join("")}
+      </svg><div class="ex-tip" hidden></div>`;
+    exHover(box, W, H, tr.flatMap((x) => x.path.map((p, k) => ({ px: A.sx(p.x), py: A.sy(p.y), code: x.code, html: `<b>${esc(x.code)} ${esc(x.name || "")}</b><small>${esc(p.T)}(${k + 1}/${x.path.length}点目)</small><span>X ${esc(fx(p.x))} · Y ${esc(fy(p.y))}</span>` }))));
+    $$("[data-code]", body).forEach((b) => b.addEventListener("click", () => goChart(b.dataset.code)));
+  }
+
+  // ---------- 相関の表(全指標どうし) ----------
+  function exMatrix(body) {
+    const dates = exDates();
+    body.innerHTML = `<section class="panel"><div class="row-head"><h3>全指標どうしの順位相関</h3><small>基準日 ${dates.length}回(${esc(dates[0] || "")} 〜 ${esc(dates.at(-1) || "")})の全部の点で、指標を2つずつ組にして順位相関を計算します。似た指標の重なり(同じことを測っていないか)や、思わぬ関係を探すのに使います。マスを押すとその2つの散布図へ</small></div>
+      <div id="exMat">${EX.matrix ? "" : '<button type="button" class="btn" id="exMatBtn">計算する(数秒かかります)</button>'}</div></section>${exFoot}`;
+    const draw = () => {
+      const { keys, M, N } = EX.matrix; const lab = (k) => exMetricText(k);
+      const col = (r) => { if (r === null) return "transparent"; const a = Math.min(1, Math.abs(r)); return r >= 0 ? `color-mix(in srgb, var(--up) ${Math.round(a * 85)}%, transparent)` : `color-mix(in srgb, var(--down) ${Math.round(a * 85)}%, transparent)`; };
+      $("#exMat").innerHTML = `<div class="table-wrap ex-mat-wrap"><table class="ex-mat"><thead><tr><th></th>${keys.map((k, j) => `<th title="${esc(lab(k))}">${j + 1}</th>`).join("")}</tr></thead><tbody>${keys.map((k, i) => `<tr><th title="${esc(SRExplore.byKey[k].group)}"><span>${i + 1}</span>${esc(lab(k))}</th>${keys.map((k2, j) => `<td style="background:${col(M[i][j])}" title="${esc(`${lab(k)} × ${lab(k2)}\nρ = ${M[i][j] === null ? "—" : M[i][j].toFixed(2)}(${N[i][j]}点)`)}" ${i !== j && M[i][j] !== null ? `data-ex-cell="${k2},${k}"` : ""}>${M[i][j] === null || i === j ? "" : Math.round(M[i][j] * 100)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>
+        <p class="foot">数字は ρ × 100(緑 = 正、赤 = 負)。両方の値がそろう点が 20 未満の組は空欄。「機関の需給」の指標は最近の基準日しか値が無いので、点が少ない点に注意。</p>`;
+      $$("[data-ex-cell]", body).forEach((td) => td.addEventListener("click", () => { [EX.x, EX.y] = td.dataset.exCell.split(","); EX.view = "scatter"; EX.scan = null; EX.hz = null; exSave(); renderExplore(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
+    };
+    if (EX.matrix) { draw(); return; }
+    $("#exMatBtn").addEventListener("click", () => {
+      $("#exMat").innerHTML = '<p class="muted">計算中…</p>';
+      setTimeout(() => {
+        const base = S.exStocks.filter((x) => !EX.ind || x.industry === EX.ind);
+        const keys = SRExplore.METRICS.filter((m) => !m.future || ["fret", "fexcess", "fdd"].includes(m.key)).map((m) => m.key);
+        EX.matrix = SRExplore.corrMatrix(base, dates, keys, EX.n, EX.m, { mkt: exMkt() }); draw();
+      }, 30);
+    });
   }
 
   // =====================================================================

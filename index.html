@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Stock Rank</title>
   <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
-  <link rel="stylesheet" href="assets/css/app.css?v=2356053730">
+  <link rel="stylesheet" href="assets/css/app.css?v=192575aca1">
   <!-- テーマは Future Sight と同じ保存先(同じ github.io なら両方に効く)。読み込み前に当てて、ちらつきを防ぐ -->
   <script>try { if (localStorage.getItem("stockrank-sidebar") === "closed") document.documentElement.classList.add("sidebar-closed"); } catch { /* */ }</script>
   <script>try { const t = localStorage.getItem("future-sight-theme"); if (["light", "dark", "prototype", "earth"].includes(t)) document.documentElement.dataset.fsTheme = t; } catch { /* */ }</script>
@@ -126,7 +126,7 @@
 
     <!-- 相関を探す -->
     <section class="view page" data-view="explore">
-      <div class="page-head"><p class="eyebrow">EXPLORE</p><h1>相関を探す</h1><p>全銘柄について2つの指標を計算し、散布図と相関で関係を探します。「過去 n か月の騰落率」と「その間の高値からの調整の深さ」、信用残・出来高の増え方と「その後 m か月」の値動き、など。基準日を毎月末にすると、何回分も重ねて偶然かどうかを確かめられます。</p></div>
+      <div class="page-head"><p class="eyebrow">EXPLORE</p><h1>相関を探す</h1><p>全銘柄について2つの指標を計算し、散布図・相関で関係を探します。値動き・市場との関係(β・RRG)・出来高・信用残・機関の需給・業績と割安さ・規模と、「その後 n か月」の値動き。上位/下位 N 銘柄や業種で絞り、業種の中の順位でも比べられます。「軌跡」は銘柄ごとに n 日おきの点をつないで動きを追い、「相関の表」は全指標どうしの関係を一覧にします。</p></div>
       <div id="exProgress" class="progress" hidden><i></i><span></span></div>
       <div class="ex-controls" id="exControls"></div>
       <div id="exBody"><p class="muted pad">読み込み中…</p></div>
@@ -223,9 +223,9 @@
   <script src="assets/js/indicators.js?v=ab227dd66f"></script>
   <script src="assets/js/analytics.js?v=46ee895628"></script>
   <script src="assets/js/trades.js?v=215a726e0f"></script>
-  <script src="assets/js/explore.js?v=4b5d35d2a8"></script>
+  <script src="assets/js/explore.js?v=e48161fdac"></script>
   <script src="assets/js/calendar.js?v=b45de4fd75"></script>
   <script src="assets/js/drawings.js?v=853bb759a2"></script>
-  <script src="assets/js/app.js?v=589a1130fc"></script>
+  <script src="assets/js/app.js?v=c67c58fbe1"></script>
 </body>
 </html>

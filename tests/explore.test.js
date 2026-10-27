@@ -49,3 +49,54 @@ const u = Array.from({ length: 101 }, (_, i) => ({ x: i - 50, y: (i - 50) ** 2 }
 const su = E.stats(u); assert.ok(Math.abs(su.r) < 0.05); assert.strictEqual(su.bins.length, 10);
 assert.ok(su.bins[0].y > su.bins[4].y && su.bins[9].y > su.bins[5].y);
 console.log("bins ok");
+
+// ---------- 追加の指標 ----------
+// TOPIX と、日次リターンがちょうど TOPIX の 2 倍の銘柄 → β = 2、相関 = 1、固有ボラ = 0
+const mkt = days.map((dd, i) => ({ d: dd, c: 1000 * Math.exp(0.01 * Math.sin(i / 3) + 0.0005 * i) }));
+const p2 = mkt.map((r, i) => ({ d: r.d, h: 0, l: 0, c: 50 * (r.c / mkt[0].c) ** 2, v: 1000 }));
+p2.forEach((r) => { r.h = r.c; r.l = r.c; });
+const s2 = { code: "3333", prices: p2, dailyFrom: days[0], shares: 2e6, credit: [],
+  fund: { annual: [
+    { period: "2025.03", end: "2025-03-31", forecast: false, availableFrom: "2025-05-10", sales: 1000, net: 100, dps: 10 },
+    { period: "2026.03", end: "2026-03-31", forecast: false, availableFrom: "2026-05-10", sales: 1200, net: 150, dps: 12 },
+    { period: "2027.03", end: "2027-03-31", forecast: true, availableFrom: "2026-05-10", sales: 1300, net: 180, dps: 14 }],
+  balance: [{ period: "2026.03", availableFrom: "2026-05-10", equity: 1000, equity_ratio: 40 }], quarter: [] } };
+const c2 = E.context(s2, days[150], 3, 1, mkt);
+const v2 = (k, c = c2) => E.value(c, k);
+assert.ok(Math.abs(v2("beta") - 2) < 1e-9, `beta ${v2("beta")}`);
+assert.ok(Math.abs(v2("corrMkt") - 1) < 1e-9 && v2("idio") < 1e-6);
+// 超過リターン = 銘柄の騰落 − TOPIX の騰落
+const i02 = E.lastIdx(p2, new Date(Date.parse(`${days[150]}T00:00:00Z`) - 3 * 30.44 * 864e5).toISOString().slice(0, 10));
+assert.ok(Math.abs(v2("excess") - ((p2[150].c / p2[i02].c - 1) - (mkt[150].c / mkt[i02].c - 1))) < 1e-12);
+// RS-Ratio は 100 前後の値
+assert.ok(v2("rsRatio") > 80 && v2("rsRatio") < 120 && v2("rsMom") > 80 && v2("rsMom") < 120);
+// PER = 時価総額 ÷ 予想純利益(百万円)。基準日が 2026-05-10 より前なら前の期の実績しか見えない
+const mc = 2e6 * p2[150].c;
+assert.ok(Math.abs(v2("per") - mc / 180e6) < 1e-9);
+assert.ok(Math.abs(v2("pbr") - mc / 1000e6) < 1e-9);
+assert.ok(Math.abs(v2("roe") - 0.15) < 1e-12 && Math.abs(v2("salesGrowth") - 0.2) < 1e-12 && Math.abs(v2("netGrowthFc") - 0.2) < 1e-12);
+assert.ok(Math.abs(v2("divYield") - 14 / p2[150].c) < 1e-12);
+const early = E.context(s2, days[60], 3, 1, mkt); // 2026-03 下旬: 2026-05-10 の発表はまだ
+assert.ok(days[60] < "2026-05-10" && Math.abs(v2("per", early) - 2e6 * p2[60].c / 100e6) < 1e-9);
+
+// 上位・下位 N
+const many = Array.from({ length: 20 }, (_, k) => ({ ...s, code: `S${k}`, shares: (k + 1) * 1e6, _cd: null }));
+const pick = E.pickRank(many, T, "mcap", 3, "both", 3, 1);
+assert.deepStrictEqual([...pick.entries()].filter(([, v]) => v === "top").map(([c]) => c), ["S19", "S18", "S17"]);
+assert.deepStrictEqual([...pick.entries()].filter(([, v]) => v === "bottom").map(([c]) => c).sort(), ["S0", "S1", "S2"]);
+// 業種中立: 業種の中の順位 0〜1 に直す
+const nz = E.neutralize([1, 2, 3, 10, 20, 30].map((v, i) => ({ T: "x", industry: i < 3 ? "A" : "B", x: v, y: -v })));
+assert.deepStrictEqual(nz.map((p) => p.x), [0, 0.5, 1, 0, 0.5, 1]);
+// IC: 基準日ごとの順位相関と、上位20% − 下位20% の差
+const icPts = ["2026-01-30", "2026-02-27"].flatMap((TT, j) => Array.from({ length: 20 }, (_, i) => ({ T: TT, x: i, y: j ? -i : i })));
+const ic = E.icSeries(icPts); assert.strictEqual(ic.n, 2); assert.ok(Math.abs(ic.list[0].ic - 1) < 1e-12 && Math.abs(ic.list[1].ic + 1) < 1e-12 && ic.hit === 0.5 && Math.abs(ic.mean) < 1e-12);
+assert.ok(Math.abs(ic.list[0].spread - 16) < 1e-12);
+// 軌跡と営業日のとびとび
+const sd = E.stepDates(days, 10, 5); assert.deepStrictEqual(sd, [days[119], days[129], days[139], days[149], days[159]]);
+const tr = E.trails([s], sd.slice(0, 3), "ret", "dd", 1, 1); assert.strictEqual(tr[0].path.length, 3);
+// 相関の表: 自分自身は 1、ret と ret の符号違いは -1 に近い
+const cm = E.corrMatrix([s, s2], E.weeklyDates(s), ["ret", "excess", "price"], 1, 1, { mkt }); assert.strictEqual(cm.M[0][0], 1); assert.ok(cm.rows > 20);
+// 先行・遅行: Y を X と同じにすると k = 0 で 1
+const ll = E.leadLag(s, E.weeklyDates(s), "ret", "ret", 1, 1, 3); assert.strictEqual(ll.length, 7); assert.ok(Math.abs(ll[3].rho - 1) < 1e-12 && ll[3].k === 0);
+assert.strictEqual(E.periodLabel(0.25), "1週"); assert.strictEqual(E.periodLabel(3), "3か月");
+console.log("explore extra ok");
