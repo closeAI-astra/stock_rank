@@ -476,3 +476,57 @@ label.btn { cursor: pointer; display: inline-flex; align-items: center; }
 .sched-item .approx { font-style: normal; font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 3px; padding: 0 4px; }
 .sched-item .link.mine { font-weight: 700; color: var(--warn); }
 @media (max-width: 560px) { .sched-day { grid-template-columns: 52px minmax(0, 1fr); gap: 8px; } }
+
+/* 相関を探す */
+.ex-controls { display: grid; gap: 10px; margin: 4px 0 14px; }
+.ex-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.ex-axes { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.ex-axes label, .ex-params label { display: grid; gap: 3px; min-width: 0; }
+.ex-axes label span, .ex-params label > span { font-size: 11px; color: var(--muted); }
+.ex-axes select { max-width: min(380px, 100%); min-width: 0; }
+.ex-axes label { flex: 1 1 260px; } .ex-axes select { width: 100%; max-width: none; }
+.ex-axes #exSwap { flex: none; height: 30px; }
+.ex-params { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: end; }
+.ex-cards strong.ex-date { font-size: 16px; }
+.ex-plot { position: relative; width: 100%; overflow: hidden; }
+.ex-svg { display: block; max-width: 100%; height: auto; cursor: crosshair; }
+.ex-svg text { font-size: 10.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.ex-grid { stroke: var(--line); stroke-width: 1; }
+.ex-zero { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; opacity: .7; }
+.ex-fit { stroke: var(--warn); stroke-width: 2; }
+.ex-bins { fill: none; stroke: var(--down); stroke-width: 2.2; } .ex-bindot { fill: var(--down); stroke: var(--panel); stroke-width: 1.5; }
+.ex-key { font-weight: 800; } .ex-key.fit { color: var(--warn); } .ex-key.bins { color: var(--down); }
+.ex-preset { border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 10px; font-size: 12px; color: inherit; cursor: pointer; }
+.ex-preset:hover { border-color: var(--accent); } .ex-preset.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ex-tip { position: absolute; z-index: 5; pointer-events: none; background: var(--panel2); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; display: grid; gap: 2px; box-shadow: 0 4px 14px rgba(0,0,0,.25); max-width: 220px; }
+.ex-tip small { color: var(--muted); font-size: 11px; }
+.ex-bar, .ex-rbar { display: inline-block; width: 60px; height: 6px; background: var(--line); border-radius: 3px; margin-right: 6px; vertical-align: middle; overflow: hidden; }
+.ex-bar i, .ex-rbar i { display: block; height: 100%; background: var(--accent); }
+.ex-rbar i { background: var(--up); } .ex-rbar.neg i { background: var(--down); }
+.ex-perdate { width: 100%; overflow: hidden; }
+
+/* スケジュール: 週を1行にしたカレンダー */
+.cal-grid { display: grid; gap: 4px; margin-bottom: 12px; }
+.cal-head, .cal-week { display: grid; grid-template-columns: 44px repeat(5, minmax(0, 1fr)) repeat(2, minmax(0, .62fr)); gap: 4px; }
+.cal-head span { font-size: 11px; color: var(--muted); text-align: center; } .cal-head span.we { color: var(--down); }
+.cal-wk { font-size: 11px; color: var(--muted); display: flex; flex-direction: column; justify-content: center; align-items: center; font-variant-numeric: tabular-nums; }
+.cal-wk small { font-size: 9.5px; }
+.cal-cell { display: flex; flex-direction: column; gap: 2px; align-items: stretch; text-align: left; min-height: 84px; min-width: 0; padding: 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); cursor: pointer; color: inherit; font: inherit; }
+.cal-cell:hover { border-color: var(--accent); }
+.cal-cell.off { background: color-mix(in srgb, var(--panel) 70%, var(--line)); }
+.cal-cell.past { opacity: .62; }
+.cal-cell.today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.cal-cell.sel { background: var(--accent-soft); }
+.cal-d { font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; } .cal-d small { color: var(--down); font-weight: 600; margin-left: 3px; font-size: 9.5px; }
+.cal-cell.off .cal-d { color: var(--down); }
+.cal-chip { display: block; font-size: 10.5px; line-height: 1.35; padding: 0 4px; border-left: 3px solid var(--k); background: color-mix(in srgb, var(--k) 14%, transparent); border-radius: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cal-chip.strong { font-weight: 700; }
+.cal-more { font-size: 10px; color: var(--muted); }
+@media (max-width: 560px) {
+  .cal-head, .cal-week { grid-template-columns: 26px repeat(5, minmax(0, 1fr)) repeat(2, minmax(0, .55fr)); gap: 2px; }
+  .cal-wk { font-size: 9.5px; } .cal-wk small { display: none; }
+  .cal-cell { min-height: 58px; padding: 2px; gap: 1px; }
+  .cal-chip { font-size: 0; height: 5px; padding: 0; border-left-width: 0; background: var(--k); }
+  .cal-chip:nth-of-type(n+4) { display: none; }
+  .cal-more { font-size: 9px; }
+}

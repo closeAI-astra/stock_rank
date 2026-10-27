@@ -124,7 +124,7 @@
   function route() {
     const h = location.hash.replace(/^#/, "");
     const [view, arg] = h.split("/");
-    const v = ["chart", "rank", "macro", "schedule", "archive", "settings", "about"].includes(view) ? view : "chart";
+    const v = ["chart", "rank", "explore", "macro", "schedule", "archive", "settings", "about"].includes(view) ? view : "chart";
     S.view = v;
     $$(".view").forEach((el) => el.classList.toggle("active", el.dataset.view === v));
     $$("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === v));
@@ -136,6 +136,7 @@
       if (!arg && code) history.replaceState(null, "", `#chart/${code}`);
     }
     if (v === "rank") renderRank();
+    if (v === "explore") renderExplore();
     if (v === "macro") renderMacro();
     if (v === "schedule") renderSchedule();
     if (v === "archive") renderArchive();
@@ -1693,9 +1694,9 @@
   // ランキング・信用(全銘柄)
   // =====================================================================
   let rankLoaded = null; let rankChart = null; const RK = { sort: "buyAmount", desc: true };
-  async function loadRankData() {
+  async function loadRankData(prog = $("#rankProgress")) {
     if (rankLoaded) return rankLoaded;
-    const prog = $("#rankProgress"); prog.hidden = false;
+    prog.hidden = false;
     const step = (label) => (done, total) => { $("i", prog).style.width = `${Math.round(done / total * 100)}%`; $("span", prog).textContent = `${label} ${done}/${total}`; };
     rankLoaded = (async () => {
       const details = await SRData.allChunks("detail", (doc) => ({ credit: doc?.credit || [], shares: num(doc?.irbank?.security?.issued_shares) }), step("信用残を読み込み中"));
@@ -1803,10 +1804,154 @@
   }
 
   // =====================================================================
+  // 相関を探す(全銘柄の2つの指標の散布図)
+  // =====================================================================
+  const EX = Object.assign({ x: "ret", y: "dd", n: 3, m: 3, base: "m24", uni: "", ind: "", scan: null }, LS.get("stockrank-explore", {}));
+  const EX_PRESETS = [
+    ["ret", "dd", "騰落率 × 調整の深さ"], ["buyChg", "fret", "買残の増加 → その後の騰落"], ["volRatio", "fret", "出来高の増え方 → その後の騰落"],
+    ["ratio", "fdd", "信用倍率 → その後の下げ"], ["buyPnl", "fret", "買い方の損益 → その後の騰落"], ["dd", "fret", "調整の深さ → その後の騰落"],
+  ];
+  const fmtNum = (v) => (v >= 1000 ? Math.round(v).toLocaleString("ja-JP") : v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toPrecision(2));
+  const exMetricText = (k) => SRExplore.byKey[k].label.replace(/(^| )n か月/g, `$1${EX.n}か月`).replace(/(^| )m か月/g, `$1${EX.m}か月`);
+  function exStocks() {
+    return S.rank.map((x) => { const c = S.rankData.charts[x.code]; return c && c.prices.length ? { code: x.code, name: x.name, industry: x.industry, prices: c.prices, dailyFrom: c.dailyFrom, credit: x.rows, shares: x.shares } : null; }).filter(Boolean);
+  }
+  // 基準日の列。「その後」の指標を使うときは、その後の m か月がそろう日までにする
+  function exDates(stocks) {
+    const X = SRExplore.byKey[EX.x], Y = SRExplore.byKey[EX.y];
+    const tpx = idxRows("TPX").map((r) => r.d); const lastDate = tpx.at(-1) || stocks[0]?.prices.at(-1)?.d;
+    const fut = X.future || Y.future; const lim = fut ? SRCal.add(lastDate, -Math.ceil(EX.m * 30.44) - 3) : lastDate;
+    const snap = (d) => { let i = tpx.length - 1; while (i > 0 && tpx[i] > d) i--; return tpx[i] || d; };
+    if (EX.uni) { const s = stocks.find((x) => x.code === EX.uni); return s ? SRExplore.weeklyDates(s).filter((d) => d <= lim) : []; }
+    if (EX.base === "latest") return [snap(lim)];
+    const months = EX.base === "m12" ? 12 : EX.base === "m60" ? 60 : 24;
+    return SRExplore.monthlyDates(lim, months).map(snap).filter((d, i, a) => a.indexOf(d) === i);
+  }
+  async function renderExplore() {
+    const ctl = $("#exControls"), body = $("#exBody");
+    if (!S.rank) {
+      body.innerHTML = '<p class="muted pad">全銘柄の株価と信用残を読み込んでいます…(ランキングと同じデータ。初回は十数MBの復号があります)</p>';
+      try { S.rankData = await loadRankData($("#exProgress")); S.rank = computeRank(S.rankData); } catch (e) { body.innerHTML = `<p class="pad">読み込めませんでした: ${esc(e.message)}</p>`; return; }
+    }
+    if (!S.exStocks) S.exStocks = exStocks();
+    const groups = [...new Set(SRExplore.METRICS.map((m) => m.group))];
+    const opts = (cur) => groups.map((g) => `<optgroup label="${esc(g)}">${SRExplore.METRICS.filter((m) => m.group === g).map((m) => `<option value="${m.key}" ${m.key === cur ? "selected" : ""}>${esc(exMetricText(m.key))}</option>`).join("")}</optgroup>`).join("");
+    const inds = [...new Set(S.exStocks.map((x) => x.industry).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ja"));
+    ctl.innerHTML = `<div class="ex-presets">${EX_PRESETS.map(([x, y, l]) => `<button type="button" class="ex-preset ${EX.x === x && EX.y === y ? "active" : ""}" data-ex-preset="${x},${y}">${esc(l)}</button>`).join("")}</div>
+      <div class="ex-axes">
+        <label><span>横軸 X</span><select id="exX">${opts(EX.x)}</select></label>
+        <button type="button" class="btn" id="exSwap" title="X と Y を入れ替え">⇄</button>
+        <label><span>縦軸 Y</span><select id="exY">${opts(EX.y)}</select></label>
+      </div>
+      <div class="ex-params">
+        <label><span>n(過去の月数)</span>${seg([["1", "1か月"], ["3", "3か月"], ["6", "6か月"], ["12", "12か月"]], String(EX.n), "ex-n")}</label>
+        <label><span>m(その後の月数)</span>${seg([["1", "1か月"], ["3", "3か月"], ["6", "6か月"]], String(EX.m), "ex-m")}</label>
+        <label><span>基準日</span>${seg([["latest", "最新の1日"], ["m12", "毎月末×1年"], ["m24", "毎月末×2年"], ["m60", "毎月末×5年"]], EX.base, "ex-base")}</label>
+        <label><span>対象</span><select id="exInd"><option value="">全業種</option>${inds.map((x) => `<option ${x === EX.ind ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>
+        <label><span>1銘柄の時系列</span><input id="exUni" list="exCodes" placeholder="コード(空=全銘柄)" value="${esc(EX.uni)}" size="12"><datalist id="exCodes">${S.exStocks.map((x) => `<option value="${esc(x.code)}">${esc(x.name || "")}</option>`).join("")}</datalist></label>
+      </div>`;
+    const save = () => { LS.set("stockrank-explore", { x: EX.x, y: EX.y, n: EX.n, m: EX.m, base: EX.base, uni: EX.uni, ind: EX.ind }); };
+    const redo = () => { EX.scan = null; save(); renderExplore(); };
+    $$("[data-ex-preset]", ctl).forEach((b) => b.addEventListener("click", () => { [EX.x, EX.y] = b.dataset.exPreset.split(","); redo(); }));
+    $("#exX").addEventListener("change", (e) => { EX.x = e.target.value; save(); renderExplore(); });
+    $("#exY").addEventListener("change", (e) => { EX.y = e.target.value; redo(); });
+    $("#exSwap").addEventListener("click", () => { [EX.x, EX.y] = [EX.y, EX.x]; redo(); });
+    $$("[data-ex-n]", ctl).forEach((b) => b.addEventListener("click", () => { EX.n = Number(b.dataset.exN); redo(); }));
+    $$("[data-ex-m]", ctl).forEach((b) => b.addEventListener("click", () => { EX.m = Number(b.dataset.exM); redo(); }));
+    $$("[data-ex-base]", ctl).forEach((b) => b.addEventListener("click", () => { EX.base = b.dataset.exBase; redo(); }));
+    $("#exInd").addEventListener("change", (e) => { EX.ind = e.target.value; redo(); });
+    $("#exUni").addEventListener("change", (e) => { const v = e.target.value.trim().toUpperCase(); EX.uni = S.exStocks.some((x) => x.code === v) ? v : ""; redo(); });
+
+    const stocks = S.exStocks.filter((x) => (EX.uni ? x.code === EX.uni : !EX.ind || x.industry === EX.ind));
+    const dates = exDates(S.exStocks);
+    const pts = dates.flatMap((T) => SRExplore.points(stocks, T, EX.x, EX.y, EX.n, EX.m));
+    const st = SRExplore.stats(pts);
+    const X = SRExplore.byKey[EX.x], Y = SRExplore.byKey[EX.y];
+    const fv = (M, v) => (M.pct ? `${(v * 100).toFixed(Math.abs(v) < 0.1 ? 1 : 0)}%` : M.log ? fmtNum(10 ** v) : v.toFixed(2));
+    const fr = (r) => (r === null || r === undefined ? "—" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}`);
+    const strength = (r) => { const a = Math.abs(r ?? 0); return a >= 0.5 ? "強い" : a >= 0.3 ? "中くらいの" : a >= 0.1 ? "弱い" : "ほとんど無い"; };
+    const multi = !EX.uni && dates.length > 1;
+    // 基準日ごとの相関(関係が毎回同じ向きかを見る)
+    const perDate = multi ? dates.map((T) => { const p = pts.filter((q) => q.T === T); const s1 = SRExplore.stats(p); return { T, rho: s1.rho ?? null, n: p.length }; }).filter((x) => x.rho !== null) : [];
+    const posShare = perDate.length ? perDate.filter((x) => x.rho > 0).length / perDate.length : null;
+    const head = st.n < 10 ? empty(`点が少なすぎます(${st.n}点)。${X.future || Y.future ? "「その後」の指標は、基準日の後に m か月分の株価が必要です。" : ""}対象・期間を広げてください。`) : `
+      <div class="cards ex-cards">
+        <article><span>順位相関(スピアマン ρ)</span><strong class="${cls(st.rho)}">${fr(st.rho)}</strong><em>${strength(st.rho)}${st.rho > 0 ? "正の" : st.rho < 0 ? "負の" : ""}相関 · |t| = ${st.t === null ? "—" : Math.abs(st.t).toFixed(1)}</em></article>
+        <article><span>相関係数(ピアソン r)</span><strong class="${cls(st.r)}">${fr(st.r)}</strong><em>上下1%を切り詰めて計算${X.log || Y.log ? " · 対数目盛の軸は log10 で計算" : ""}</em></article>
+        <article><span>点の数</span><strong>${st.n.toLocaleString("ja-JP")}</strong><em>${EX.uni ? `${esc(EX.uni)} の毎週 ${dates.length}回` : `${dates.length}回の基準日 × 最大 ${stocks.length}銘柄`}</em></article>
+        ${multi ? `<article><span>基準日ごとに見ると</span><strong>${Math.round(posShare * 100)}%</strong><em>${perDate.length}回のうち ρ がプラスだった割合</em></article>` : `<article><span>基準日</span><strong class="ex-date">${esc(dates.at(-1) || "—")}</strong><em>${X.future || Y.future ? `その後 ${EX.m}か月がそろう最新の日` : "最新のデータの日"}</em></article>`}
+      </div>`;
+    body.innerHTML = `${head}
+      <section class="panel"><div class="row-head"><h3>${esc(exMetricText(EX.y))} <small>(縦)</small> × ${esc(exMetricText(EX.x))} <small>(横)</small></h3><small>点を押すとその銘柄のチャートへ。<b class="ex-key fit">━</b> 回帰直線 <b class="ex-key bins">●━</b> X を10等分した区間ごとの Y の中央値(曲がった関係も見える)。${multi ? "色が濃いほど新しい基準日。" : ""}★ = お気に入り・売買を記録した銘柄</small></div>
+        <div id="exPlot" class="ex-plot"></div></section>
+      ${st.quintiles ? `<section class="panel"><div class="row-head"><h3>X の大きさで5つに分けたときの Y</h3><small>相関係数は「直線的な関係」しか測れません。端の組だけ違う、真ん中だけ違う、のような形はこの表で見ます</small></div>
+        <div class="table-wrap"><table class="grid"><thead><tr><th>X の組</th><th>X の範囲</th><th>点の数</th><th>Y の平均</th><th>Y の中央値</th><th>Y がプラスの割合</th></tr></thead><tbody>${st.quintiles.map((q) => `<tr><th>${["小さい 20%", "やや小さい", "真ん中", "やや大きい", "大きい 20%"][q.k - 1]}</th><td>${fv(X, q.xMin)} 〜 ${fv(X, q.xMax)}</td><td>${q.n}</td><td>${Y.pct ? pctCell(q.mean) : fv(Y, q.mean)}</td><td>${Y.pct ? pctCell(q.median) : fv(Y, q.median)}</td><td><span class="ex-bar"><i style="width:${Math.round(q.pos * 100)}%"></i></span>${Math.round(q.pos * 100)}%</td></tr>`).join("")}</tbody></table></div></section>` : ""}
+      ${perDate.length > 2 ? `<section class="panel"><div class="row-head"><h3>基準日ごとの順位相関 ρ</h3><small>毎回同じ向きなら関係は安定、プラスとマイナスを行き来するなら偶然や相場つきの影響が大きい</small></div><div id="exPerDate" class="ex-perdate"></div></section>` : ""}
+      <section class="panel"><div class="row-head"><h3>「${esc(exMetricText(EX.y))}」と相関の強い指標を探す</h3><small>今の対象・基準日で、ほかの全部の指標との順位相関を計算して強い順に並べます。行を押すと横軸にします</small></div>
+        <div id="exScan">${EX.scan ? exScanHtml(EX.scan) : '<button type="button" class="btn" id="exScanBtn">計算する</button>'}</div></section>
+      <p class="foot">相関があっても原因とは限りません(業種や相場全体の動きが両方を動かしていることがあります)。毎月の基準日を重ねると、「その後 m か月」が隣の月どうしで重なるので点どうしが独立ではなく、|t| は実際より大きく出ます(目安は |t| が 2〜3 を超えるか、基準日ごとの ρ が同じ向きにそろうか)。株価は分割調整済み、出来高は分割を反映、信用残は今の株数にそろえています。2026-10-20 の JPX の訂正前の値は除いています。</p>`;
+    exPlot(pts, st, X, Y, fv, multi ? dates : null);
+    if (perDate.length > 2) exPerDatePlot(perDate);
+    $("#exScanBtn")?.addEventListener("click", () => {
+      $("#exScan").innerHTML = '<p class="muted">計算中…</p>';
+      setTimeout(() => { EX.scan = SRExplore.scan(stocks, dates, EX.y, EX.n, EX.m); $("#exScan").innerHTML = exScanHtml(EX.scan); bindScan(); }, 30);
+    });
+    const bindScan = () => $$("[data-ex-x]", body).forEach((b) => b.addEventListener("click", () => { EX.x = b.dataset.exX; save(); renderExplore(); window.scrollTo({ top: 0, behavior: "smooth" }); }));
+    bindScan();
+  }
+  function exScanHtml(list) {
+    const fr = (r) => (r === null ? "—" : `${r >= 0 ? "+" : ""}${r.toFixed(2)}`);
+    return `<div class="table-wrap"><table class="grid"><thead><tr><th>指標(X)</th><th>順位相関 ρ</th><th></th><th>ピアソン r</th><th>点の数</th></tr></thead><tbody>${list.map((x) => `<tr class="${x.key === EX.x ? "sel" : ""}"><th><button type="button" class="link" data-ex-x="${x.key}">${esc(exMetricText(x.key))}</button><small>${esc(x.group)}</small></th><td class="${cls(x.rho)}">${fr(x.rho)}</td><td><span class="ex-rbar ${x.rho < 0 ? "neg" : ""}"><i style="width:${Math.round(Math.min(1, Math.abs(x.rho ?? 0)) * 100)}%"></i></span></td><td>${fr(x.r)}</td><td>${x.n}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+  // 散布図(SVG)。軸の範囲は上下 1% を除いた範囲にし、はみ出す点は縁に寄せて白抜きで描く
+  function exPlot(pts, st, X, Y, fv, dates) {
+    const box = $("#exPlot"); if (!box) return;
+    const W = Math.max(300, box.clientWidth), H = isNarrow() ? 300 : 440; const M = { l: 54, r: 12, t: 10, b: 30 };
+    if (!pts.length) { box.innerHTML = ""; return; }
+    const q = (a, p) => { const s = a.slice().sort((u, v) => u - v); return s[Math.round(p * (s.length - 1))]; };
+    const dom = (a) => { let lo = q(a, 0.01), hi = q(a, 0.99); if (lo === hi) { lo -= 1e-9 + Math.abs(lo) * 0.1; hi += 1e-9 + Math.abs(hi) * 0.1; } const pad = (hi - lo) * 0.04; return [lo - pad, hi + pad]; };
+    const [x0, x1] = dom(pts.map((p) => p.x)), [y0, y1] = dom(pts.map((p) => p.y));
+    const sx = (v) => M.l + (Math.min(x1, Math.max(x0, v)) - x0) / (x1 - x0) * (W - M.l - M.r), sy = (v) => H - M.b - (Math.min(y1, Math.max(y0, v)) - y0) / (y1 - y0) * (H - M.t - M.b);
+    const ticks = (lo, hi) => { const step0 = (hi - lo) / 5; const mag = 10 ** Math.floor(Math.log10(step0)); const step = [1, 2, 2.5, 5, 10].map((k) => k * mag).find((k) => k >= step0); const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-12; v += step) out.push(+v.toPrecision(10)); return out; };
+    const mine = new Set([...S.favs, ...S.trades.map((t) => t.code)]);
+    const dIdx = dates ? new Map(dates.map((d, i) => [d, i])) : null;
+    const accent = css("--accent") || "#2962ff", warn = css("--warn") || "#ff9800";
+    const zeroX = x0 < 0 && x1 > 0 && !X.log, zeroY = y0 < 0 && y1 > 0 && !Y.log;
+    const line = st.slope !== null && st.slope !== undefined ? `<line x1="${sx(x0)}" y1="${sy(st.intercept + st.slope * x0)}" x2="${sx(x1)}" y2="${sy(st.intercept + st.slope * x1)}" class="ex-fit"/>` : "";
+    const order = pts.map((p, i) => i).sort((a, b) => (mine.has(pts[a].code) ? 1 : 0) - (mine.has(pts[b].code) ? 1 : 0));
+    const binLine = st.bins?.length > 2 ? `<polyline points="${st.bins.map((b) => `${sx(b.x).toFixed(1)},${sy(b.y).toFixed(1)}`).join(" ")}" class="ex-bins"/>${st.bins.map((b) => `<circle cx="${sx(b.x).toFixed(1)}" cy="${sy(b.y).toFixed(1)}" r="3.5" class="ex-bindot"/>`).join("")}` : "";
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="ex-svg">
+      ${ticks(x0, x1).map((v) => `<line x1="${sx(v)}" x2="${sx(v)}" y1="${M.t}" y2="${H - M.b}" class="ex-grid"/><text x="${sx(v)}" y="${H - M.b + 16}" text-anchor="middle">${esc(fv(X, v))}</text>`).join("")}
+      ${ticks(y0, y1).map((v) => `<line x1="${M.l}" x2="${W - M.r}" y1="${sy(v)}" y2="${sy(v)}" class="ex-grid"/><text x="${M.l - 6}" y="${sy(v) + 4}" text-anchor="end">${esc(fv(Y, v))}</text>`).join("")}
+      ${zeroX ? `<line x1="${sx(0)}" x2="${sx(0)}" y1="${M.t}" y2="${H - M.b}" class="ex-zero"/>` : ""}${zeroY ? `<line x1="${M.l}" x2="${W - M.r}" y1="${sy(0)}" y2="${sy(0)}" class="ex-zero"/>` : ""}
+      <g>${order.map((i) => { const p = pts[i]; const out = p.x < x0 || p.x > x1 || p.y < y0 || p.y > y1; const my = mine.has(p.code); const op = dIdx ? 0.18 + 0.62 * (dIdx.get(p.T) / Math.max(1, dates.length - 1)) : 0.55; return `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${my ? 4 : 2.6}" fill="${out ? "none" : my ? warn : accent}" stroke="${out || my ? (my ? warn : accent) : "none"}" fill-opacity="${my ? 0.95 : op.toFixed(2)}" data-i="${i}"/>`; }).join("")}</g>
+      ${line}${binLine}</svg><div class="ex-tip" hidden></div>`;
+    const svg = $("svg", box), tip = $(".ex-tip", box);
+    const near = (e) => { const r = svg.getBoundingClientRect(); const mx = (e.clientX - r.left) * W / r.width, my = (e.clientY - r.top) * H / r.height; let best = null, bd = 144; pts.forEach((p, i) => { const d = (sx(p.x) - mx) ** 2 + (sy(p.y) - my) ** 2; if (d < bd) { bd = d; best = i; } }); return best; };
+    svg.addEventListener("mousemove", (e) => {
+      const i = near(e); if (i === null) { tip.hidden = true; return; }
+      const p = pts[i]; tip.hidden = false;
+      tip.innerHTML = `<b>${esc(p.code)} ${esc(p.name || "")}</b><small>${esc(p.industry || "")} · 基準日 ${esc(p.T)}</small><span>X ${esc(fv(X, p.x))} · Y ${esc(fv(Y, p.y))}</span>`;
+      const br = box.getBoundingClientRect(); tip.style.left = `${Math.min(e.clientX - br.left + 12, br.width - 200)}px`; tip.style.top = `${e.clientY - br.top + 12}px`;
+    });
+    svg.addEventListener("mouseleave", () => { tip.hidden = true; });
+    svg.addEventListener("click", (e) => { const i = near(e); if (i !== null) goChart(pts[i].code); });
+  }
+  function exPerDatePlot(list) {
+    const box = $("#exPerDate"); const W = Math.max(300, box.clientWidth), H = 150, M = { l: 34, r: 8, t: 8, b: 22 };
+    const bw = (W - M.l - M.r) / list.length;
+    const lim = Math.max(0.3, ...list.map((x) => Math.abs(x.rho))); const sy2 = (v) => M.t + (lim - v) / (2 * lim) * (H - M.t - M.b);
+    const up = css("--up") || "#26a69a", dn = css("--down") || "#ef5350";
+    box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" class="ex-svg">${[-lim, 0, lim].map((v) => `<line x1="${M.l}" x2="${W - M.r}" y1="${sy2(v)}" y2="${sy2(v)}" class="${v ? "ex-grid" : "ex-zero"}"/><text x="${M.l - 4}" y="${sy2(v) + 4}" text-anchor="end">${v.toFixed(2)}</text>`).join("")}
+      ${list.map((x, i) => `<rect x="${(M.l + i * bw + bw * 0.15).toFixed(1)}" width="${(bw * 0.7).toFixed(1)}" y="${Math.min(sy2(0), sy2(x.rho)).toFixed(1)}" height="${Math.abs(sy2(x.rho) - sy2(0)).toFixed(1)}" fill="${x.rho >= 0 ? up : dn}"><title>${x.T} ρ=${x.rho.toFixed(2)}(${x.n}銘柄)</title></rect>`).join("")}
+      ${list.map((x, i) => (i % Math.ceil(list.length / 8) === 0 ? `<text x="${M.l + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${x.T.slice(2, 7).replace("-", "/")}</text>` : "")).join("")}</svg>`;
+  }
+
+  // =====================================================================
   // 相場のスケジュール
   // =====================================================================
   const SCHED_KINDS = [["policy", "金融政策", "#e91e63"], ["macro", "経済指標", "#7e57c2"], ["earnings_fixed", "決算(日程確定)", "#ff8f00"], ["earnings", "決算(推定)", "#f7a600"], ["earnings_season", "決算シーズン", "#f7a600"], ["sq", "SQ", "#26a69a"], ["rights", "権利・配当落ち", "#ef5350"], ["dividend", "配当・分配金", "#8d6e63"], ["nisa", "積立・NISA", "#42a5f5"], ["index", "指数の入れ替え", "#5c6bc0"], ["credit", "信用期日", "#ff7043"], ["note", "stockAI のメモ", "#78909c"], ["claude", "Claude の調査", "#00acc1"]];
-  const SC = { range: 30, off: new Set(LS.get("stockrank-sched-off", [])), open: new Set() };
+  const SC = { range: 30, off: new Set(LS.get("stockrank-sched-off", [])), open: new Set(), mode: LS.get("stockrank-sched-mode", "list"), weeks: LS.get("stockrank-sched-weeks", 8), shift: 0, day: null };
   const todayJst = () => new Date(Date.now() + 9 * 36e5).toISOString().slice(0, 10);
   async function loadSchedule() {
     if (S.sched) return S.sched;
@@ -1842,33 +1987,65 @@
   async function renderSchedule() {
     const ctl = $("#schedControls"), body = $("#schedBody");
     await loadSchedule();
-    const from = todayJst(), to = SRCal.add(from, SC.range);
+    const today = todayJst(); const cal = SC.mode === "cal";
+    // カレンダーは月曜始まりの週を1行にする。前後へは4週ずつ動かす
+    const monday = (d) => SRCal.add(d, -((new Date(`${d}T00:00:00Z`).getUTCDay() + 6) % 7));
+    const from = cal ? SRCal.add(monday(today), SC.shift * 7) : today;
+    const to = cal ? SRCal.add(from, SC.weeks * 7 - 1) : SRCal.add(from, SC.range);
     const all = scheduleEvents(from, to);
     const counts = Object.fromEntries(SCHED_KINDS.map(([k]) => [k, all.filter((e) => e.kind === k).length]));
-    ctl.innerHTML = `${seg([[7, "1週間"], [14, "2週間"], [30, "1か月"], [90, "3か月"]].map(([v, l]) => [String(v), l]), String(SC.range), "sched-range")}
+    ctl.innerHTML = `${seg([["list", "リスト"], ["cal", "カレンダー(週ごと)"]], SC.mode, "sched-mode")}
+      ${cal ? `${seg([[4, "4週"], [8, "8週"], [13, "3か月"], [26, "半年"]].map(([v, l]) => [String(v), l]), String(SC.weeks), "sched-weeks")}<div class="seg"><button type="button" data-sched-shift="-4">‹ 前</button><button type="button" data-sched-shift="0">今週</button><button type="button" data-sched-shift="4">次 ›</button></div>`
+        : seg([[7, "1週間"], [14, "2週間"], [30, "1か月"], [90, "3か月"]].map(([v, l]) => [String(v), l]), String(SC.range), "sched-range")}
       <div class="sched-kinds">${SCHED_KINDS.filter(([k]) => counts[k]).map(([k, l, c]) => `<button type="button" class="chip-btn ${SC.off.has(k) ? "off" : ""}" data-sched-kind="${k}"><i style="background:${c}"></i>${l}<small>${counts[k]}</small></button>`).join("")}</div>`;
     const mine = new Set([...S.favs, ...S.trades.map((t) => t.code)]);
     const list = all.filter((e) => !SC.off.has(e.kind));
     const byDate = new Map(); list.forEach((e) => { if (!byDate.has(e.date)) byDate.set(e.date, []); byDate.get(e.date).push(e); });
     const wd = (d) => "日月火水木金土"[new Date(`${d}T00:00:00Z`).getUTCDay()];
     const kindOf = (k) => SCHED_KINDS.find(([x]) => x === k) || [k, k, "#999"];
-    const dayHtml = [...byDate.entries()].map(([date, items]) => {
+    const dayHtml = (date, items) => {
       const earn = items.filter((e) => e.kind === "earnings"), other = items.filter((e) => e.kind !== "earnings");
       earn.sort((a, b) => (mine.has(b.code) ? 1 : 0) - (mine.has(a.code) ? 1 : 0) || (S.byCode.get(a.code)?.rank || 999) - (S.byCode.get(b.code)?.rank || 999));
       const open = SC.open.has(date) || earn.length <= 8;
       const earnHtml = earn.length ? `<div class="sched-item"><span class="kind" style="background:${kindOf("earnings")[2]}">決算(推定)</span><div><b>${earn.length}社</b> ${(open ? earn : earn.slice(0, 8)).map((e) => `<button type="button" class="link ${mine.has(e.code) ? "mine" : ""}" data-code="${esc(e.code)}" title="${esc(e.note)}">${mine.has(e.code) ? "★" : ""}${esc(e.code)} ${esc(S.byCode.get(e.code)?.name || "")}</button>`).join("・")}${!open ? ` <button type="button" class="link" data-sched-open="${date}">ほか ${earn.length - 8}社 ›</button>` : ""}<small>去年の同じ時期の発表日から推定(曜日をそろえて 52 週後)。正式な日付は各社の発表で確認</small></div></div>` : "";
       const otherHtml = other.map((e) => { const [, l, c] = kindOf(e.kind); return `<div class="sched-item ${e.strong ? "strong" : ""}"><span class="kind" style="background:${c}">${esc(l)}</span><div><b>${e.code ? `<button type="button" class="link ${mine.has(e.code) ? "mine" : ""}" data-code="${esc(e.code)}">${mine.has(e.code) ? "★" : ""}${esc(e.title)}</button>` : esc(e.title)}</b>${e.approx ? ' <em class="approx">目安</em>' : ""}${e.note ? `<small>${esc(e.note)}</small>` : ""}</div></div>`; }).join("");
-      return `<div class="sched-day ${date === from ? "today" : ""}"><div class="sched-date"><b>${esc(date.slice(5).replace("-", "/"))}</b><span class="${["日", "土"].includes(wd(date)) ? "we" : ""}">${wd(date)}</span>${date === from ? "<em>今日</em>" : ""}</div><div class="sched-items">${otherHtml}${earnHtml}</div></div>`;
-    }).join("");
+      return `<div class="sched-day ${date === today ? "today" : ""}"><div class="sched-date"><b>${esc(date.slice(5).replace("-", "/"))}</b><span class="${["日", "土"].includes(wd(date)) ? "we" : ""}">${wd(date)}</span>${date === today ? "<em>今日</em>" : ""}</div><div class="sched-items">${otherHtml || ""}${earnHtml}</div></div>`;
+    };
+    let main;
+    if (cal) {
+      if (!SC.day || SC.day < from || SC.day > to) SC.day = today >= from && today <= to ? today : from;
+      // 1日のマスに出すのは4件まで(重要なものから)。決算(推定)は「決算 N社」の1件にまとめる
+      const cell = (date) => {
+        const items = byDate.get(date) || []; const earn = items.filter((e) => e.kind === "earnings");
+        const chips = items.filter((e) => e.kind !== "earnings").sort((a, b) => (b.strong ? 1 : 0) - (a.strong ? 1 : 0)).map((e) => { const [, l, c] = kindOf(e.kind); const star = e.code && mine.has(e.code) ? "★" : ""; return `<span class="cal-chip ${e.strong ? "strong" : ""}" style="--k:${c}" title="${esc(`${l}: ${e.title}${e.note ? `\n${e.note}` : ""}`)}">${star}${esc(e.title)}</span>`; });
+        if (earn.length) { const my = earn.filter((e) => mine.has(e.code)).length; chips.push(`<span class="cal-chip" style="--k:${kindOf("earnings")[2]}" title="決算(推定) ${earn.length}社">決算 ${earn.length}社${my ? ` ★${my}` : ""}</span>`); }
+        const max = 4; const more = chips.length - max;
+        const dw = new Date(`${date}T00:00:00Z`).getUTCDay(); const hol = SRCal.JP_HOLIDAYS.has(date);
+        const label = date.slice(8) === "01" || date === from ? `${Number(date.slice(5, 7))}/${Number(date.slice(8))}` : String(Number(date.slice(8)));
+        return `<button type="button" class="cal-cell ${dw === 0 || dw === 6 || hol ? "off" : ""} ${date === today ? "today" : ""} ${date === SC.day ? "sel" : ""} ${date < today ? "past" : ""}" data-sched-day="${date}"><span class="cal-d">${label}${hol ? "<small>休</small>" : ""}</span>${chips.slice(0, more > 0 ? max - 1 : max).join("")}${more > 0 ? `<span class="cal-more">ほか ${more + 1}件</span>` : ""}</button>`;
+      };
+      const weeks = Array.from({ length: SC.weeks }, (_, w) => SRCal.add(from, w * 7));
+      const grid = `<div class="cal-grid"><div class="cal-head"><span></span>${"月火水木金土日".split("").map((x, i) => `<span class="${i >= 5 ? "we" : ""}">${x}</span>`).join("")}</div>
+        ${weeks.map((w) => `<div class="cal-week"><span class="cal-wk">${Number(w.slice(5, 7))}/${Number(w.slice(8))}<small>週</small></span>${Array.from({ length: 7 }, (_, i) => cell(SRCal.add(w, i))).join("")}</div>`).join("")}</div>`;
+      const sel = byDate.get(SC.day) || [];
+      main = `${grid}<section class="panel cal-detail"><div class="row-head"><h3>${esc(SC.day.slice(5).replace("-", "/"))}(${wd(SC.day)})の予定</h3><small>マスを押すとその日の詳しい予定をここに出します</small></div>${sel.length ? dayHtml(SC.day, sel) : '<p class="muted">表示するイベントはありません。</p>'}</section>`;
+    } else {
+      main = [...byDate.entries()].map(([date, items]) => dayHtml(date, items)).join("") || empty("この期間に表示するイベントはありません。");
+    }
     const study = SRCal.eventStudy(idxRows("TPX"));
     const studyHtml = study.length ? `<section class="panel"><div class="row-head"><h3>過去の TOPIX の動き(イベント別)</h3><small>${esc(idxRows("TPX")[0]?.d || "")} からの日足。当日 = 前日の終値から当日の終値まで、前5日・後5日はその日をはさむ5営業日の騰落の平均</small></div>
       <div class="table-wrap"><table class="grid"><thead><tr><th>イベント</th><th>回数</th><th>当日の平均</th><th>上がった割合</th><th>前5日</th><th>後5日</th></tr></thead><tbody>${study.map((x) => `<tr><th>${esc(x.label)}</th><td>${x.n}</td><td>${pctCell(x.day, 2)}</td><td>${Math.round(x.win * 100)}%</td><td>${pctCell(x.pre, 2)}</td><td>${pctCell(x.post, 2)}</td></tr>`).join("")}</tbody></table></div>
       <p class="foot">TOPIX は配当を含まない指数なので、権利落ち日は配当の分だけ下がって見えます。回数が少ないものは偶然の影響が大きい点に注意。</p></section>` : "";
     const src = [S.sched?.policy?.note, S.sched?.claude ? `Claude の調査: ${S.sched.claude.updatedAt || ""} 更新` : "Claude の調査: まだありません(毎週の定期タスクで追加)"].filter(Boolean).join(" / ");
-    body.innerHTML = `${dayHtml || empty("この期間に表示するイベントはありません。")}<p class="foot">${esc(src)}。決まりごとから計算した日付は「目安」と付けています(祝日・臨時の変更でずれることがあります)。★はお気に入り・売買を記録した銘柄。</p>${studyHtml}`;
-    $$("[data-sched-range]", ctl).forEach((b) => b.addEventListener("click", () => { SC.range = Number(b.dataset.schedRange); renderSchedule(); }));
-    $$("[data-sched-kind]", ctl).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.schedKind; SC.off.has(k) ? SC.off.delete(k) : SC.off.add(k); LS.set("stockrank-sched-off", [...SC.off]); renderSchedule(); }));
-    $$("[data-sched-open]", body).forEach((b) => b.addEventListener("click", () => { SC.open.add(b.dataset.schedOpen); renderSchedule(); }));
+    body.innerHTML = `${main}<p class="foot">${esc(src)}。決まりごとから計算した日付は「目安」と付けています(祝日・臨時の変更でずれることがあります)。★はお気に入り・売買を記録した銘柄。${cal ? "過去の週の決算(推定)は去年の日付からの推定のままです。" : ""}</p>${studyHtml}`;
+    const re = () => renderSchedule();
+    $$("[data-sched-mode]", ctl).forEach((b) => b.addEventListener("click", () => { SC.mode = b.dataset.schedMode; LS.set("stockrank-sched-mode", SC.mode); re(); }));
+    $$("[data-sched-weeks]", ctl).forEach((b) => b.addEventListener("click", () => { SC.weeks = Number(b.dataset.schedWeeks); LS.set("stockrank-sched-weeks", SC.weeks); re(); }));
+    $$("[data-sched-shift]", ctl).forEach((b) => b.addEventListener("click", () => { const v = Number(b.dataset.schedShift); SC.shift = v ? SC.shift + v : 0; re(); }));
+    $$("[data-sched-range]", ctl).forEach((b) => b.addEventListener("click", () => { SC.range = Number(b.dataset.schedRange); re(); }));
+    $$("[data-sched-kind]", ctl).forEach((b) => b.addEventListener("click", () => { const k = b.dataset.schedKind; SC.off.has(k) ? SC.off.delete(k) : SC.off.add(k); LS.set("stockrank-sched-off", [...SC.off]); re(); }));
+    $$("[data-sched-day]", body).forEach((b) => b.addEventListener("click", () => { SC.day = b.dataset.schedDay; re(); requestAnimationFrame(() => $(".cal-detail")?.scrollIntoView({ behavior: "smooth", block: "nearest" })); }));
+    $$("[data-sched-open]", body).forEach((b) => b.addEventListener("click", () => { SC.open.add(b.dataset.schedOpen); re(); }));
     $$("[data-code]", body).forEach((b) => b.addEventListener("click", () => goChart(b.dataset.code)));
   }
 

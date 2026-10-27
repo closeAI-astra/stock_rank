@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Stock Rank</title>
   <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
-  <link rel="stylesheet" href="assets/css/app.css?v=e5b21d9bf1">
+  <link rel="stylesheet" href="assets/css/app.css?v=2356053730">
   <!-- テーマは Future Sight と同じ保存先(同じ github.io なら両方に効く)。読み込み前に当てて、ちらつきを防ぐ -->
   <script>try { if (localStorage.getItem("stockrank-sidebar") === "closed") document.documentElement.classList.add("sidebar-closed"); } catch { /* */ }</script>
   <script>try { const t = localStorage.getItem("future-sight-theme"); if (["light", "dark", "prototype", "earth"].includes(t)) document.documentElement.dataset.fsTheme = t; } catch { /* */ }</script>
@@ -25,6 +25,7 @@
       <nav class="nav-list">
         <a class="nav-item" href="#chart" data-nav="chart"><span class="nav-icon">⟋</span><span>チャート</span></a>
         <a class="nav-item" href="#rank" data-nav="rank"><span class="nav-icon">☷</span><span>ランキング・信用</span></a>
+        <a class="nav-item" href="#explore" data-nav="explore"><span class="nav-icon">⁘</span><span>相関を探す</span></a>
         <a class="nav-item" href="#macro" data-nav="macro"><span class="nav-icon">◇</span><span>マクロ・貿易</span></a>
         <a class="nav-item" href="#schedule" data-nav="schedule"><span class="nav-icon">▤</span><span>スケジュール</span></a>
         <a class="nav-item" href="#archive" data-nav="archive"><span class="nav-icon">▦</span><span>保存データ</span></a>
@@ -123,7 +124,15 @@
       <p class="foot">金額 = 残高 × 申込日の終値。評価損益率は個別銘柄では公表されていないため、残高の増減と期間 VWAP から建玉の取得コストを追跡した<b>推定値</b>です(計算方法は「使い方」)。</p>
     </section>
 
-    <!-- マクロ・貿易 -->
+    <!-- 相関を探す -->
+    <section class="view page" data-view="explore">
+      <div class="page-head"><p class="eyebrow">EXPLORE</p><h1>相関を探す</h1><p>全銘柄について2つの指標を計算し、散布図と相関で関係を探します。「過去 n か月の騰落率」と「その間の高値からの調整の深さ」、信用残・出来高の増え方と「その後 m か月」の値動き、など。基準日を毎月末にすると、何回分も重ねて偶然かどうかを確かめられます。</p></div>
+      <div id="exProgress" class="progress" hidden><i></i><span></span></div>
+      <div class="ex-controls" id="exControls"></div>
+      <div id="exBody"><p class="muted pad">読み込み中…</p></div>
+    </section>
+
+    <!-- スケジュール -->
     <section class="view page" data-view="schedule">
       <div class="page-head"><p class="eyebrow">SCHEDULE</p><h1>相場のスケジュール</h1><p>決算(推定)・日銀/FOMC・経済指標・SQ・権利付き最終日・月初の積立・指数の入れ替え・配当の支払い・信用期日など。下に、過去の TOPIX の動き(イベント別)。</p></div>
       <div class="sched-controls" id="schedControls"></div>
@@ -214,8 +223,9 @@
   <script src="assets/js/indicators.js?v=ab227dd66f"></script>
   <script src="assets/js/analytics.js?v=46ee895628"></script>
   <script src="assets/js/trades.js?v=215a726e0f"></script>
+  <script src="assets/js/explore.js?v=4b5d35d2a8"></script>
   <script src="assets/js/calendar.js?v=b45de4fd75"></script>
   <script src="assets/js/drawings.js?v=853bb759a2"></script>
-  <script src="assets/js/app.js?v=c77d93f21b"></script>
+  <script src="assets/js/app.js?v=589a1130fc"></script>
 </body>
 </html>
