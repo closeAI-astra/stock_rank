@@ -34,10 +34,26 @@ if (-not $env:FS_PAGES_PASSWORD) {
 $py = if (Get-Command py -ErrorAction SilentlyContinue) { "py" } else { "python" }
 & $py -m pip install --quiet "cryptography>=42"
 
+# github.com につながるまで待つ(名前が引けて 443 番につながるか)。分単位で上限を決める
+function Wait-GitHub([int]$Minutes) {
+  $until = (Get-Date).AddMinutes($Minutes); $warned = $false
+  while ((Get-Date) -lt $until) {
+    try {
+      [void][System.Net.Dns]::GetHostAddresses("github.com")
+      $c = New-Object System.Net.Sockets.TcpClient
+      $ok = $c.ConnectAsync("github.com", 443).Wait(10000); $c.Close()
+      if ($ok) { if ($warned) { Write-Host "GitHub につながりました。" }; return $true }
+    } catch { }
+    if (-not $warned) { Write-Warning "GitHub につながりません(インターネットの接続・DNS を確認してください)。つながるまで最大 $Minutes 分待ちます…"; $warned = $true }
+    Start-Sleep -Seconds 30
+  }
+  return $false
+}
+
 # 取得の途中で止めたときの保存データ(未コミット)があっても最新のスクリプトを取り込めるよう --autostash を付ける
-git pull --rebase --autostash
+if (Wait-GitHub 2) { git pull --rebase --autostash } else { Write-Warning "GitHub につながらないので、最新のスクリプトを取り込まずに続けます" }
 # 前回送れなかった分があれば、取得を始める前に送っておく(長い取得の間も GitHub に反映されるように)
-if ([int](git rev-list --count '@{u}..HEAD') -gt 0) { git push }
+if ([int](git rev-list --count '@{u}..HEAD') -gt 0 -and (Wait-GitHub 1)) { git push }
 $raw = "$Source-raw-$(Get-Date -Format yyyyMMdd-HHmm).tar.gz.enc"   # 生の HTML(暗号化)。この PC に残す(.gitignore 済み)
 # Windows PowerShell 5.1 は空の引数 "" を外部コマンドに渡さないので、--codes は指定したときだけ付ける
 $archiveArgs = @("scripts\stock_archive.py", "--source", $Source, "--mode", $Mode, "--max-minutes", $MaxMinutes, "--delay", $Delay, "--raw-out", $raw)
@@ -55,11 +71,13 @@ if ($LASTEXITCODE -ne 0) {
 $ahead = [int](git rev-list --count '@{u}..HEAD')
 if ($ahead -gt 0) {
   $sent = $false
-  for ($i = 1; $i -le 4; $i++) {
+  for ($i = 1; $i -le 6; $i++) {
+    # 長い取得の間に Wi-Fi が切れた・スリープから戻った直後などは github.com の名前が引けない。つながるまで最大30分待つ
+    if (-not (Wait-GitHub 30)) { break }
     git pull --rebase --autostash
     git push
     if ($LASTEXITCODE -eq 0) { $sent = $true; break }
-    Start-Sleep -Seconds (5 * $i)
+    Start-Sleep -Seconds (10 * $i)
   }
   if ($sent) {
     Write-Host "GitHub に送りました($ahead 件)。数分で Stock Rank のページに反映されます。"
