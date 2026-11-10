@@ -45,3 +45,34 @@ assert.ok(Math.abs(f.b - 0.5) < 1e-9 && f.mae < 1e-9 && f.maeNaive > 0.1, `${f.b
 // nowcast: 最後の公表日より後の日だけ。幅は週数とともに広がる
 const nc = M.nowcast(f, b2, [weeks.at(-1), "2099-01-01"]); assert.strictEqual(nc.length, 0); // 価格の無い日は出さない
 console.log("marginmodel ok");
+
+// ---------- 全銘柄の合計(JPX 銘柄別信用取引残高の PDF)----------
+const fx = require("./fixtures/margin_market_2026-10.json");
+assert.strictEqual(M.monday("2026-11-13"), "2026-11-09"); assert.strictEqual(M.friday("2026-11-09"), "2026-11-13"); assert.strictEqual(M.friday("2026-11-15"), "2026-11-13");
+// 怪しい日(2026-10-20: 買残が前日の7割になり翌日に戻った)は使わない
+assert.ok(!M.cleanDaily(fx.daily).some((r) => r.date === "2026-10-20"));
+// 信用倍率: 毎日の合計(東証)は公表値(2市場)と 0.01 以内で一致する。先を見ない比の補正で更に近づく
+const rc = M.ratioCheck(fx.official, fx.daily);
+assert.strictEqual(rc.weeks.length, 6);
+assert.ok(rc.weeks.every((w) => Math.abs(w.raw - w.off) < 0.01), JSON.stringify(rc.weeks.map((w) => w.raw - w.off)));
+assert.ok(rc.mae <= rc.maeRaw && rc.mae < 0.005 && rc.maeNaive > 0.3, `${rc.mae} ${rc.maeRaw} ${rc.maeNaive}`);
+assert.ok(rc.fb > 1 && rc.fb < 1.002 && rc.fs > 1 && rc.fs < 1.001); // 名古屋の分だけ公表値が少し大きい
+// 今週の推定: 最新 11/09(月)→ 11/13(金)申込分、残り4営業日。幅は正
+const nc2 = M.ratioNowcast(fx.official, fx.daily, rc);
+assert.strictEqual(nc2.target, "2026-11-13"); assert.strictEqual(nc2.basis, "2026-11-09"); assert.strictEqual(nc2.remaining, 4);
+assert.ok(Math.abs(nc2.ratio - (3389929086 * rc.fb) / (340537277 * rc.fs)) < 1e-9 && nc2.lo < nc2.ratio && nc2.hi > nc2.ratio);
+// 公表値がまだ無い週の金曜なら、その金曜が対象で残り0日(幅0)
+const nc3 = M.ratioNowcast(fx.official, fx.daily.filter((r) => r.date <= "2026-11-06"), rc);
+assert.strictEqual(nc3.target, "2026-11-06"); assert.strictEqual(nc3.remaining, 0); assert.ok(Math.abs(nc3.hi - nc3.lo) < 1e-12);
+// 評価損益率: 全銘柄の約定金額ベースの系列を x にした先を見ない推定(b はそれまでの週だけで決める)
+const pf = M.fitX(fx.pl, M.linkSeries(fx.daily), { minTrain: 3 });
+assert.strictEqual(pf.n, 7); assert.strictEqual(pf.nEval, 4);
+assert.ok(pf.mae < pf.maeNaive, `${pf.mae} ${pf.maeNaive}`);
+// 事前登録の答え合わせ: 同じ週の公表値と突き合わせる
+const g = M.gradeNowcasts([{ targetDate: "2026-10-30", ratio: 10.45, pl: -12 }, { targetDate: "2026-11-13", ratio: 9.9, pl: -20 }], fx.official, fx.pl);
+assert.ok(Math.abs(g[0].ratioErr - (10.45 - 3654854000 / 349230000)) < 1e-9 && Math.abs(g[0].plErr - 0.54) < 1e-9);
+assert.strictEqual(g[1].offRatio, null); assert.strictEqual(g[1].plErr, null);
+// 指数の対数
+const li = M.logIndex([{ d: "2026-01-02", c: 100 }, { d: "2026-01-09", c: 110 }]);
+assert.ok(Math.abs(li("2026-01-12").x - 100 * Math.log(110)) < 1e-9); assert.strictEqual(li("2026-02-01"), null);
+console.log("marginmodel (全銘柄) ok");

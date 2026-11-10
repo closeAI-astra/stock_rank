@@ -1,6 +1,6 @@
 {
   "note": "stock_rank と stockAI(Future Sight)のデータの分担表。同じものを両方で取りに行かないよう、取得する側を1つに決めて、もう一方はここに書いた場所から読む。.json.enc は Future Sight と同じ鍵・形式の暗号化(scripts/shared_data.py で読める)。暗号化していない .json はそのまま読める",
-  "updated": "2026-11-10",
+  "updated": "2026-11-11",
   "encryption": "PBKDF2-SHA256(Future Sight のパスワード, future.insight.stockAI.si の enc-meta.json の salt と iter) → AES-256-GCM。中身は 先頭12バイトの IV + 暗号文(gzip した JSON)",
   "provides": {
     "title": "stock_rank が取得して置いているもの(stockAI はここから読む。取得しなくてよい)",
@@ -151,6 +151,14 @@
         "path": "data/market.json.enc",
         "updates": "日次",
         "from": "stockAI"
+      },
+      {
+        "name": "全銘柄の信用残の毎日の合計と、公表前の推定の記録",
+        "path": "data/market.json.enc の creditMarket(daily, nowcast)",
+        "updates": "日次(朝・夕方の回)",
+        "from": "JPX 銘柄別信用取引残高(東証・全銘柄・毎営業日の PDF。金額は約定ベース)を stockAI の scripts/build_margin_market.py が合計",
+        "fields": "daily: [{date, buy_sh, sell_sh, buy_val, sell_val, ratio, n_issues, n_priced, cov_buy_share, pl_buy_cov, pl_sell_cov, pl_buy_link, suspect}] / nowcast: [{madeAt, basisDate, targetDate, buy, sell, ratio, buyVal, pl, method}]",
+        "note": "信用倍率(2市場)の予想と、信用評価損益率の全銘柄の約定金額ベースの推定に使う(ランキング・信用)"
       },
       {
         "name": "貿易統計・マクロ",

@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from fs_crypto import encrypt_json, make_meta  # noqa: E402
 
 out, password = Path(sys.argv[1]), sys.argv[2]
+FX = json.loads((Path(__file__).resolve().parent / "fixtures" / "margin_market_2026-10.json").read_text(encoding="utf-8"))
 random.seed(7)
 meta, key = make_meta(password, iterations=310000)
 (out / "data" / "chart-chunks").mkdir(parents=True, exist_ok=True)
@@ -166,5 +167,14 @@ w("market", {"generatedAt": "2026-10-25T22:00:00+09:00",
              "sectors": [{"industry": ind, "n": 2, "chg1d": random.gauss(0, 0.01), "chg5d": random.gauss(0, 0.02), "chg20d": random.gauss(0, 0.05), "above25": random.random()} for ind in sorted({x[2] for x in STOCKS})],
              "credit": [{"date": d.isoformat(), "week": d.isoformat(), "buy": 1.5e9 + i * 1e6, "sell": 3e8 - i * 1e6, "ratio": (1.5e9 + i * 1e6) / (3e8 - i * 1e6), "n": 12} for i, d in enumerate(wk)],
              "creditDaily": [{"date": d.isoformat(), "buy": 1.6e9, "sell": 2.7e8, "ratio": 5.9, "n": 12} for d in bdays(dt.date(2026, 9, 25), END)],
-             "flows": {"weeks": [{"weekEnd": "2026-10-09", "availableFrom": "2026-10-16", "foreigners": -1234.5, "individuals": 987.0, "proprietary": 100.0, "total": -50.0, "totalValue": 900000.0}], "unit": "億円(差引き=買い−売り)", "source": "JPX 投資部門別"}})
+             "flows": {"weeks": [{"weekEnd": "2026-10-09", "availableFrom": "2026-10-16", "foreigners": -1234.5, "individuals": 987.0, "proprietary": 100.0, "total": -50.0, "totalValue": 900000.0}], "unit": "億円(差引き=買い−売り)", "source": "JPX 投資部門別"},
+             # 全銘柄の信用残の毎日の合計(stockAI の build_margin_market.py の形)。値は tests/fixtures の実データ
+             "creditMarket": {"source": "JPX 銘柄別信用取引残高(東証・全銘柄・毎営業日)の合計。金額は約定ベース",
+                              "daily": [{**r, "buy_val": r["buy_sh"] * 1780.0, "n_issues": 4217, "n_priced": 586, "cov_buy_share": 0.7} for r in FX["daily"]],
+                              "nowcast": [{"madeAt": "2026-10-27T17:30:00+09:00", "basisDate": "2026-10-26", "targetDate": "2026-10-30", "ratio": 9.69, "pl": -13.9, "method": "テスト"},
+                                          {"madeAt": "2026-11-11T02:00:15+09:00", "basisDate": "2026-11-09", "targetDate": "2026-11-13", "ratio": 9.9546, "pl": -19.68, "method": "テスト"}]}})
+# 自分のデータ(stock_rank の data/inst/market)。3つ目の引数にフォルダを渡したときだけ作る
+if len(sys.argv) > 3:
+    own = Path(sys.argv[3]); (own / "data" / "inst").mkdir(parents=True, exist_ok=True)
+    (own / "data" / "inst" / "market.json.enc").write_bytes(encrypt_json({"updatedAt": "2026-11-10T19:13:00+09:00", "margin": [{**o, "ratio": o["buy"] / o["sell"]} for o in FX["official"]], "marginSource": "JPX 信用取引現在高(テスト)"}, key))
 print(f"mock data: {len(STOCKS)} stocks → {out}")

@@ -1,9 +1,16 @@
 {
-  "note": "信用評価損益率(買い方・2市場=東証+名証)。申込日(金曜。休日なら前営業日)ごとの公表値(%)。毎週の Claude の定期タスクが公開情報から追記する",
-  "updatedAt": "2026-11-10",
+  "note": "信用評価損益率(買い方・2市場=東証+名証。日本経済新聞社の算出)。申込日(金曜。休日なら前営業日)ごとの公表値(%)。毎週の Claude の定期タスクが公開情報から追記する",
+  "updatedAt": "2026-11-11",
   "values": [
+    { "date": "2026-09-04", "value": -5.34, "source": "株式マーケットデータ(stock-marketdata.com)" },
+    { "date": "2026-09-11", "value": -6.50, "source": "株式マーケットデータ(stock-marketdata.com)" },
+    { "date": "2026-09-18", "value": -5.24, "source": "株式マーケットデータ(stock-marketdata.com)" },
+    { "date": "2026-09-25", "value": -5.48, "source": "株式マーケットデータ(stock-marketdata.com)" },
     { "date": "2026-10-02", "value": -5.56, "source": "株式マーケットデータ(stock-marketdata.com)" },
+    { "date": "2026-10-09", "value": -6.58, "source": "株式マーケットデータ(stock-marketdata.com)" },
+    { "date": "2026-10-16", "value": -10.41, "source": "株式マーケットデータ(stock-marketdata.com)" },
     { "date": "2026-10-23", "value": -13.50, "source": "株式マーケットデータ(stock-marketdata.com)" },
-    { "date": "2026-10-30", "value": -12.54, "source": "株式マーケットデータ(stock-marketdata.com)" }
+    { "date": "2026-10-30", "value": -12.54, "source": "株式マーケットデータ(stock-marketdata.com)" },
+    { "date": "2026-11-06", "value": -21.08, "source": "株式マーケットデータ(stock-marketdata.com)" }
   ]
 }
