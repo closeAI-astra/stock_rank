@@ -250,7 +250,7 @@
     $$("[data-set]", body).forEach((el) => el.addEventListener("change", () => {
       const k = el.dataset.set; S.set[k] = k === "scale" ? Number(el.value) : el.value; saveSettings(); afterSettings();
       if (k === "creditMethod" && S.cur && !S.cur.isIndex) computeEst(S.cur);
-      if (k === "creditMethod" && S.rank) { const m = $("#rankMethod"); if (m) m.value = el.value; S.rank = computeRank(S.rankData); }
+      if (k === "creditMethod" && S.rank) { const m = $("#rankMethod"); if (m) m.value = el.value; S.rank = computeRank(S.rankData); S.mmStocks = null; S.exStocks = null; }
       toast("保存しました");
     }));
     $$("[data-set-ind]", body).forEach((el) => el.addEventListener("change", () => { const k = el.dataset.setInd; S.set.ind = el.checked ? [...new Set([...S.set.ind, k])] : S.set.ind.filter((x) => x !== k); saveSettings(); afterSettings(); }));
@@ -364,7 +364,8 @@
       S.marketSaved = { kabutan, irbank }; S.instMarket = inst;
     }
     // 東証全体: JPX の公表(Institutional data で取得)> 株探保存 > IRBANK保存
-    const whole = SRCredit.mergeSources([[S.instMarket?.margin, "JPX(東証全体)"], ...ARCHIVE_SOURCES.map(([k, label]) => [S.marketSaved[k]?.margin, `${label}(東証全体)`])]);
+    // IRBANK の市場全体の表は株数ではなく金額(円)なので、株数の列には混ぜない(信用評価損益率のモデルの公表値として使う)
+    const whole = SRCredit.mergeSources([[S.instMarket?.margin, "JPX(東証全体)"], ...ARCHIVE_SOURCES.filter(([k]) => k !== "irbank").map(([k, label]) => [S.marketSaved[k]?.margin, `${label}(東証全体)`])]);
     // 合計に入った銘柄数が少ない日(取得漏れ)は、合計が不連続に落ちるので除く
     const maxN = Math.max(0, ...[...(S.market.credit || []), ...(S.market.creditDaily || [])].map((r) => num(r.n) || 0));
     const full = (rows) => dropErrata(rows).filter((r) => !maxN || (num(r.n) || 0) >= maxN * 0.9);
@@ -1760,13 +1761,14 @@
       $("#rankIndustry").innerHTML += inds.map((x) => `<option>${esc(x)}</option>`).join("");
       ["#rankFilter", "#rankIndustry", "#rankNoWarm"].forEach((s) => $(s).addEventListener("input", drawRankTable));
       $("#rankMethod").value = S.set.creditMethod;
-      $("#rankMethod").addEventListener("change", () => { S.set.creditMethod = $("#rankMethod").value; saveSettings(); S.rank = computeRank(S.rankData); drawRankTable(); drawRankAgg(); });
+      $("#rankMethod").addEventListener("change", () => { S.set.creditMethod = $("#rankMethod").value; saveSettings(); S.rank = computeRank(S.rankData); S.mmStocks = null; drawRankTable(); drawRankAgg(); drawMarginModel(); });
       table.addEventListener("click", (e) => { const th = e.target.closest("th[data-sort]"); if (th) { const k = th.dataset.sort; RK.desc = RK.sort === k ? !RK.desc : true; RK.sort = k; drawRankTable(); return; } const b = e.target.closest("[data-code]"); if (b) goChart(b.dataset.code); });
     }
-    if (S.rank) { drawRankTable(); return; }
+    // 「相関を探す」で先に読み込んだときは、合計とモデルがまだ描かれていない
+    if (S.rank) { drawRankTable(); if (!$("#rankAgg").innerHTML) drawRankAgg(); if (!$("#rankModel").innerHTML) drawMarginModel(); return; }
     table.innerHTML = '<tbody><tr><td class="muted pad">全銘柄の信用残と株価を読み込んでいます…(初回は十数MBの復号があります)</td></tr></tbody>';
     try { S.rankData = await loadRankData(); } catch (e) { table.innerHTML = `<tbody><tr><td class="pad">読み込めませんでした: ${esc(e.message)}</td></tr></tbody>`; return; }
-    S.rank = computeRank(S.rankData); drawRankTable(); drawRankAgg();
+    S.rank = computeRank(S.rankData); drawRankTable(); drawRankAgg(); drawMarginModel();
   }
   const RANK_COLS = [
     ["code", "銘柄", (x) => `<button type="button" class="link" data-code="${esc(x.code)}"><b>${esc(x.code)}</b> ${esc(x.name || "")}</button><small>${esc(x.industry || "")}</small>`, "s"],
@@ -1794,6 +1796,81 @@
     $("#rankCount").textContent = `${list.length}銘柄`;
     $("#rankTable").innerHTML = `<thead><tr><th>#</th>${RANK_COLS.map(([k, l]) => `<th data-sort="${k}" class="${RK.sort === k ? (RK.desc ? "desc" : "asc") : ""}">${l}</th>`).join("")}</tr></thead><tbody>${list.map((x, i) => `<tr><td class="muted">${i + 1}</td>${RANK_COLS.map(([k, , f], j) => (j === 0 ? `<th>${f(x)}</th>` : `<td>${f(x)}</td>`)).join("")}</tr>`).join("")}</tbody>`;
   }
+  // ---------- 信用評価損益率(買い方・2市場)の推定モデル ----------
+  // 公表値: 手で入れた値 > data/events/margin_pl.json(毎週の Claude の定期タスク)> stockAI の経済指標の発表 > IRBANK の保存
+  const MM = { kg: LS.get("stockrank-mm-k", 0.1), chart: null };
+  async function marginTargets() {
+    if (!S.mmSrc) {
+      const json = (u) => fetch(u, { cache: "no-cache" }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+      const [irb, econ, file] = await Promise.all([SRData.own("irbank/market").catch(() => null), S.econ && !S.econ.error ? S.econ : SRData.fs("econ").catch(() => null), json("data/events/margin_pl.json")]);
+      S.mmSrc = {
+        // 保存した表(最新の取得分)と、取得のたびに積み上げた行(extra.損益率)。土日の日付は昔の年のずれなので除く
+        irbank: SRMargin.mergeTargets(SRMargin.parseIrbank(irb?.pages), (irb?.margin || []).filter((r) => { const w = new Date(`${r.date}T00:00:00Z`).getUTCDay(); return w > 0 && w < 6; }).map((r) => ({ date: r.date, y: r.extra?.["損益率"] ? Number(String(r.extra["損益率"]).replace(/[+%]/g, "")) : NaN, src: "IRBANK" }))),
+        econ: (econ?.releases || []).filter((r) => r.series_id === "JP_MARGIN_PL").map((r) => ({ date: r.period, y: Number(r.value), src: "stockAI の経済指標" })),
+        file: (file?.values || []).map((r) => ({ date: r.date, y: Number(r.value), src: r.source ? `Claude の調査(${r.source})` : "Claude の調査" })),
+        fileAt: file?.updatedAt || null,
+      };
+    }
+    const manual = LS.get("stockrank-marginpl", []).map((r) => ({ date: r.date, y: Number(r.y), src: "手で入力" }));
+    return SRMargin.mergeTargets(manual, S.mmSrc.file, S.mmSrc.econ, S.mmSrc.irbank);
+  }
+  function marginStocks() {
+    if (!S.mmStocks) S.mmStocks = (S.rank || []).map((x) => ({ code: x.code, rows: SRMargin.prepRows(x.rows), prices: S.rankData.charts[x.code]?.prices || [] })).filter((s) => s.rows.length && s.prices.length);
+    return S.mmStocks;
+  }
+  async function drawMarginModel() {
+    const box = $("#rankModel"); if (!box || !S.rank) return;
+    box.innerHTML = '<section class="panel"><p class="muted">信用評価損益率のモデルを計算中…</p></section>';
+    const targets = await marginTargets(); const stocks = marginStocks();
+    const built = SRMargin.build(stocks, MM.kg, MM.kg); const model = SRMargin.fit(targets, built);
+    const days = idxRows("TPX").map((r) => r.d); const now = SRMargin.nowcast(model, built, days);
+    // 比べるもの: 回転なし(先入れ先出しだけ)と、建て替えの割合を変えたもの
+    const comp = [0, 0.05, 0.1, 0.2].map((k) => { const f = k === MM.kg ? model : SRMargin.fit(targets, SRMargin.build(stocks, k, k)); return { k, mae: f.mae, rmse: f.rmse, hit: f.hit, b: f.b }; });
+    const last = model.weekly.at(-1), cur = now.at(-1), lastT = targets.at(-1);
+    const f2 = (v) => (v === null || v === undefined ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`);
+    const cnt = (k) => targets.filter((o) => o.src.startsWith(k)).length;
+    box.innerHTML = `<section class="panel"><div class="row-head"><h3>信用評価損益率(買い方・2市場)の推定</h3><small>日経などが毎週公表する東証・名証の信用買い方の評価損益率を、stockAI 対象銘柄の毎日の信用残から推定します。公表は申込日(金曜)の翌週。公表を待たずに、毎営業日の終値で今週の値を推定します</small></div>
+      ${model.n < 15 ? empty(`公表値と重なる期間が短すぎます(${model.n}週)。`) : `<div class="cards">
+        <article><span>最新の公表値</span><strong class="${cls(lastT?.y)}">${f2(lastT?.y)}</strong><em>${esc(lastT?.date || "")} 申込分 · ${esc(lastT?.src || "")}</em></article>
+        ${cur ? `<article><span>推定(${esc(cur.date)} の終値まで)</span><strong class="${cls(cur.y)}">${f2(cur.y)}</strong><em>95% の幅 ${cur.lo.toFixed(1)}〜${cur.hi.toFixed(1)}% · 公表日から ${Math.round(cur.weeks * 10) / 10}週</em></article>
+        <article><span>前回の公表からの推定変化</span><strong class="${cls(cur.y - last.y)}">${cur.y - last.y >= 0 ? "+" : ""}${(cur.y - last.y).toFixed(2)}pt</strong><em>= b ${model.b?.toFixed(2)} × 対象銘柄の推定の変化 ${cur.x - last.x >= 0 ? "+" : ""}${(cur.x - last.x).toFixed(2)}pt</em></article>`
+        : `<article><span>今週の推定</span><strong>—</strong><em>最新の公表日(${esc(last?.date || "")})より後の株価がまだありません(株価は ${esc(days.at(-1) || "")} まで)。株価が更新されると毎営業日の推定が出ます</em></article>
+        <article><span>最新の週の答え合わせ</span><strong class="${cls(last?.pred)}">${f2(last?.pred)}</strong><em>${esc(last?.date || "")} 申込分の推定(先を見ない) → 公表値 ${f2(last?.y)}・誤差 ${last?.pred === null || last?.pred === undefined ? "—" : `${(last.pred - last.y >= 0 ? "+" : "")}${(last.pred - last.y).toFixed(2)}pt`}</em></article>`}
+        <article><span>先を見ない検証の誤差(1週先)</span><strong>${model.mae?.toFixed(2) ?? "—"}<small>pt</small></strong><em>前回値のままの予想 ${model.maeNaive?.toFixed(2) ?? "—"}pt · 変化の向きの的中 ${model.hit === null ? "—" : `${Math.round(model.hit * 100)}%`}(${model.nEval}週)</em></article>
+      </div>
+      <div id="mmChart" class="mini-chart tall-chart"></div>
+      <div class="ex-params mm-ctl"><label><span>建て替えの割合(1週あたり)</span>${seg([[0, "0%(回転なし)"], [0.05, "5%"], [0.1, "10%"], [0.2, "20%"]].map(([v, l]) => [String(v), l]), String(MM.kg), "mm-k")}</label></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>モデル</th><th>平均の誤差</th><th>二乗平均の誤差</th><th>向きの的中</th><th>b</th></tr></thead><tbody>
+        <tr><th>前回の公表値のまま</th><td>${model.maeNaive?.toFixed(2)}pt</td><td>${model.rmseNaive?.toFixed(2)}pt</td><td>—</td><td>—</td></tr>
+        ${comp.map((c) => `<tr class="${c.k === MM.kg ? "sel" : ""}"><th>前回値 + b × 推定の変化(建て替え ${Math.round(c.k * 100)}%/週)</th><td>${c.mae?.toFixed(2)}pt</td><td>${c.rmse?.toFixed(2)}pt</td><td>${c.hit === null ? "—" : `${Math.round(c.hit * 100)}%`}</td><td>${c.b?.toFixed(2)}</td></tr>`).join("")}
+      </tbody></table></div>
+      <details class="mm-detail"><summary>直近の週ごとの公表値と推定</summary><div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>公表値</th><th>推定(先を見ない)</th><th>誤差</th><th>対象銘柄の推定 x</th><th>出どころ</th></tr></thead><tbody>${model.weekly.slice(-20).reverse().map((o) => `<tr><th>${esc(o.date)}</th><td>${f2(o.y)}</td><td>${o.pred === null ? "—" : f2(o.pred)}</td><td>${o.pred === null ? "—" : `${(o.pred - o.y >= 0 ? "+" : "")}${(o.pred - o.y).toFixed(2)}`}</td><td>${f2(o.x)}</td><td>${esc(o.src)}</td></tr>`).join("")}</tbody></table></div></details>`}
+      <details class="mm-detail"><summary>公表値を手で入れる(日経・証券会社の発表を見て)</summary>
+        <form id="mmForm" class="mm-form"><input type="date" name="date" required><input type="number" name="y" step="0.01" placeholder="例 -13.50" required><button class="btn" type="submit">追加</button></form>
+        <p class="foot">入れた値はこの端末だけに保存され、同じ日の他の出どころより優先します。${LS.get("stockrank-marginpl", []).map((r) => `<span class="mm-chip">${esc(r.date)} ${f2(Number(r.y))} <button type="button" class="link" data-mm-del="${esc(r.date)}">✕</button></span>`).join(" ")}</p></details>
+      <p class="foot">公表値 ${targets.length}週(IRBANK の保存 ${cnt("IRBANK")}・stockAI の経済指標 ${cnt("stockAI")}・Claude の調査 ${cnt("Claude")}${S.mmSrc.fileAt ? ` / ${esc(S.mmSrc.fileAt)} 更新` : ""}・手入力 ${cnt("手で")})。
+        推定のしくみ: 銘柄ごとに信用買残の増減から建玉の取得コストを追い(増えた分はその間の VWAP、先入れ先出し、6か月で期日)、毎週その取得単価を時価との差の一定割合だけ時価に寄せます(同じ週の中での売り買いの回転・建て替え)。全銘柄を足した「時価 ÷ 取得コスト − 1」が対象銘柄の推定 x(信用残は公表された日以降だけ使い、その日の終値で値洗い)。公表値とは対象(約400銘柄と全銘柄)も回転の仕方も違い水準が合わないので、「前回の公表値 + b × x の変化」で今週の値を推定します。b はそれより前の公表値だけで決めています。
+        検証では、建て替えなし(0%)より 5〜20% の方が誤差が小さく、含み益と含み損で割合を変えても良くなりませんでした。95% の幅は検証の誤差を公表日からの週数の平方根倍に広げたもので、急落の週は外れやすい点に注意。</p></section>`;
+    $$("[data-mm-k]", box).forEach((b) => b.addEventListener("click", () => { MM.kg = Number(b.dataset.mmK); LS.set("stockrank-mm-k", MM.kg); drawMarginModel(); }));
+    $("#mmForm")?.addEventListener("submit", (e) => { e.preventDefault(); const fd = new FormData(e.target); const d = String(fd.get("date")), y = Number(fd.get("y")); if (!d || !Number.isFinite(y)) return; const list = LS.get("stockrank-marginpl", []).filter((r) => r.date !== d); list.push({ date: d, y }); list.sort((a, b) => (a.date < b.date ? -1 : 1)); LS.set("stockrank-marginpl", list); drawMarginModel(); });
+    $$("[data-mm-del]", box).forEach((b) => b.addEventListener("click", () => { LS.set("stockrank-marginpl", LS.get("stockrank-marginpl", []).filter((r) => r.date !== b.dataset.mmDel)); drawMarginModel(); }));
+    MM.chart?.remove(); MM.chart = null;
+    const el = $("#mmChart"); if (!el) return;
+    MM.chart = LW.createChart(el, { autoSize: true, ...chartTheme(), localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, leftPriceScale: { visible: true, borderColor: css("--tv-border") } });
+    const pf = { type: "custom", formatter: (v) => `${v.toFixed(1)}%`, minMove: 0.1 };
+    const ln = (o) => MM.chart.addSeries(LW.LineSeries, { priceFormat: pf, lastValueVisible: false, priceLineVisible: false, ...o });
+    const xs = ln({ color: alpha(css("--muted") || "#888888", 0.6), lineWidth: 1, priceScaleId: "left", title: "対象銘柄の推定 x" }); xs.setData([...model.weekly.map((o) => ({ time: o.date, value: o.x })), ...now.map((o) => ({ time: o.date, value: o.x }))].filter((o, i, a) => !i || o.time > a[i - 1].time));
+    const off = ln({ color: css("--credit-buy") || "#ef5350", lineWidth: 2, pointMarkersVisible: true, title: "公表値", lastValueVisible: true }); off.setData(targets.map((o) => ({ time: o.date, value: o.y })));
+    const pr = ln({ color: "#ffb300", lineWidth: 2, lineStyle: LW.LineStyle.Dashed, title: "推定(先を見ない)" }); pr.setData(model.weekly.filter((o) => o.pred !== null).map((o) => ({ time: o.date, value: o.pred })));
+    if (now.length && last) {
+      const head = { time: last.date, value: last.y };
+      const nc = ln({ color: "#ffb300", lineWidth: 3, title: "今週の推定", lastValueVisible: true }); nc.setData([head, ...now.map((o) => ({ time: o.date, value: o.y }))]);
+      [["lo", "下限"], ["hi", "上限"]].forEach(([k, l]) => { const s = ln({ color: alpha("#ffb300", 0.45), lineWidth: 1, lineStyle: LW.LineStyle.Dotted, title: l }); s.setData([head, ...now.map((o) => ({ time: o.date, value: o[k] }))]); });
+    }
+    [-20, -10, 0].forEach((lv) => off.createPriceLine({ price: lv, color: lv ? alpha(css("--down") || "#ef5350", 0.4) : css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: !!lv, title: lv ? `${lv}%` : "" }));
+    MM.chart.timeScale().fitContent();
+  }
+
   function drawRankAgg() {
     const list = S.rank || []; const agg = aggregateSeries(list); const box = $("#rankAgg");
     const valid = list.filter((x) => x.buyAmount !== null);

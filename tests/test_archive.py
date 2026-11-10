@@ -79,6 +79,24 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(ia.parse_num("1.5億"), 1.5e8)
         self.assertIsNone(ia.parse_num("-"))
         self.assertEqual(ia.parse_num("-35"), -35)
+        # IRBANK の市場の信用残: 単位がいくつも並ぶ金額
+        self.assertEqual(ia.parse_num("6兆4802億"), 6.4802e12)
+        self.assertEqual(ia.parse_num("-490億8800万"), -4.9088e10)
+
+    def test_irbank_market_margin(self):
+        # IRBANK の「信用取引」の表: 先頭に年の行、金額は「6兆4802億」、損益率は extra に残す
+        h = ["日付", "買い残高", "前日比", "売り残高", "前日比", "損益率"]
+        tables = [{"title": "金額", "headers": h, "rows": [["2026", "円", "円", "%"], ["01/09", "4兆", "", "1兆", "", "-3.04"], ["12/26", "4兆1000億", "", "9000億", "", "-5.85"]]},
+                  {"title": "金額", "headers": h, "rows": [["2025", "円", "円", "%"], ["09/12", "4兆1511億", "-813億3400万", "1兆902億", "+1335億9400万", "-5.29"]]}]
+        m = ia.extract_margin(tables, 2026)
+        self.assertEqual([r["date"] for r in m], ["2025-09-12", "2025-12-26", "2026-01-09"])
+        self.assertEqual(m[0]["buy"], 4.1511e12)
+        self.assertEqual(m[-1]["extra"]["損益率"], "-3.04")
+
+    def test_year_row(self):
+        # 表の先頭の「2025」から下の月日をその年として数える(今年で数えると1年ずれる)
+        self.assertEqual(ia.parse_dates(["2025", "09/12", "06/06"], 2026), [None, "2025-09-12", "2025-06-06"])
+        self.assertEqual(ia.parse_dates(["2026", "01/09", "12/26"], 2026), [None, "2026-01-09", "2025-12-26"])
 
     def test_crypto_roundtrip(self):
         meta, key = make_meta("pw", iterations=1000)

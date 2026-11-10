@@ -66,6 +66,18 @@ git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
   git commit -m "$Source archive (local) $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 }
+# 株探の週次のついでに、IRBANK の「信用取引」のページ(東証・名証の信用残と信用評価損益率)を1枚だけ取る。
+# 信用評価損益率の推定モデルの答え合わせに使う。失敗しても株探の分は送る
+if ($Source -eq "kabutan" -and -not $Codes) {
+  & $py scripts\stock_archive.py --source irbank --market-only --raw-out "irbank-market-raw-$(Get-Date -Format yyyyMMdd-HHmm).tar.gz.enc"
+  if ($LASTEXITCODE -eq 0) {
+    git add "data/irbank"
+    git diff --cached --quiet
+    if ($LASTEXITCODE -ne 0) { git commit -m "irbank market (local) $(Get-Date -Format 'yyyy-MM-dd HH:mm')" }
+  } else {
+    Write-Warning "IRBANK の信用取引のページを取れませんでした(株探の分はこのまま送ります)"
+  }
+}
 # まだ GitHub に送っていない分(前回 push に失敗した分も含む)をまとめて送る。
 # 取得中に GitHub 側が進んでいる(定期取得のボットなど)と push は拒否されるので、取り込んでから送り直す
 $ahead = [int](git rev-list --count '@{u}..HEAD')

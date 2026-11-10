@@ -545,3 +545,10 @@ table.ex-mat tbody th span { display: inline-block; width: 20px; color: var(--mu
 table.ex-mat td { width: 24px; height: 22px; text-align: center; cursor: pointer; }
 table.ex-mat td:hover { outline: 2px solid var(--accent); }
 @media (max-width: 560px) { table.ex-mat tbody th { max-width: 130px; } }
+
+/* 信用評価損益率の推定モデル */
+.mini-chart.tall-chart { height: 340px; }
+.mm-ctl { margin: 10px 0; }
+.mm-detail { margin: 10px 0; } .mm-detail summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.mm-form { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.mm-chip { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin: 2px; }

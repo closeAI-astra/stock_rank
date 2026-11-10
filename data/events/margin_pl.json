@@ -1,0 +1,9 @@
+{
+  "note": "信用評価損益率(買い方・2市場=東証+名証)。申込日(金曜。休日なら前営業日)ごとの公表値(%)。毎週の Claude の定期タスクが公開情報から追記する",
+  "updatedAt": "2026-11-10",
+  "values": [
+    { "date": "2026-10-02", "value": -5.56, "source": "株式マーケットデータ(stock-marketdata.com)" },
+    { "date": "2026-10-23", "value": -13.50, "source": "株式マーケットデータ(stock-marketdata.com)" },
+    { "date": "2026-10-30", "value": -12.54, "source": "株式マーケットデータ(stock-marketdata.com)" }
+  ]
+}

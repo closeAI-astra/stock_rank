@@ -174,6 +174,13 @@ def parse_num(s) -> float | None:
         return None
     neg = t.startswith(("▲", "△", "-", "−", "－"))
     t = t.lstrip("▲△-−－+＋")
+    # 「6兆4802億」「490億8800万」のように単位がいくつも並ぶ金額は、区切りごとに足す
+    if len(re.findall(r"[兆億万]", t)) >= 2 or ("兆" in t):
+        parts = re.findall(r"(\d+(?:\.\d+)?)(兆|億|万)?", re.sub(r"(円|株)$", "", t))
+        unit = {"兆": 1e12, "億": 1e8, "万": 1e4, "": 1.0}
+        if parts and "".join(a + b for a, b in parts) == re.sub(r"(円|株)$", "", t):
+            v = sum(float(a) * unit[b] for a, b in parts)
+            return -v if neg else v
     mult = 1.0
     for suf, m in (("億", 1e8), ("万", 1e4), ("千", 1e3)):
         if suf in t:
@@ -202,6 +209,11 @@ def parse_dates(cells: list[str], year_hint: int) -> list[str | None]:
     for c in cells:
         c = (c or "").strip()
         iso = None
+        # 年だけの行(IRBANK の表の先頭の「2026」など)は、そこから下の月日の年にする
+        if re.fullmatch(r"(19|20)\d\d", c):
+            year, prev_month = int(c), None
+            out.append(None)
+            continue
         for rx, kind in DATE_PATTERNS:
             m = rx.search(c) if kind == "ymd" else rx.match(c)
             if not m:
@@ -346,6 +358,8 @@ class IRBank(Source):
     KEEP = DEEP | {"holder", "shareholder", "dividend", "results", "value"}
     KEEP_EDINET = {"pl", "bs", "cf", "quarter", "dividend"}
     min_delay = 3.0  # 続けて取ると応答が遅くなる(タイムアウトが増える)ので、間隔を広めに
+    # --market-only のときに取る市場全体のページ(東証・名証の信用残と信用評価損益率。週1回・1ページ)
+    market_direct = [("market_margin", "/market/margin", "信用取引")]
     labels = {"zandaka": "信用残", "karauri": "空売り", "taisyaku": "貸借", "gyakuhibu": "逆日歩", "margin": "信用残", "short": "空売り", "lending": "貸借取引", "holder": "大株主", "dividend": "配当", "results": "決算", "value": "株価指標", "top": "銘柄トップ",
               "pl": "損益計算書", "bs": "貸借対照表", "cf": "キャッシュフロー"}
     # 個別の開示書類(/7203/140120181113436778 のような数字だけのページ)やイベント・ニュースの一覧は、数が多く表も無いので取らない
@@ -544,12 +558,16 @@ def archive_stock(src: Source, f: Fetcher, code: str, opts, raw: dict[str, bytes
 
 def archive_market(src: Source, f: Fetcher, opts, raw: dict[str, bytes], year_hint: int, out: Path, key: bytes) -> dict | None:
     """市場全体のページ(東証全体の信用残など)を取って data/{source}/market.json.enc に積み増す。"""
-    st, html, final = f.get(src.base + "/")
-    if st != 200:
-        print(f"[{src.label}] トップページを取得できませんでした({st})。市場全体のページは今回は取りません。", flush=True)
-        return None
-    top = parse_html(html)
-    cands = src.market_pages(top["anchors"], 15)
+    direct = getattr(src, "market_direct", None) if getattr(opts, "market_only", False) else None
+    if direct:
+        cands = [(name, src.base + path, text) for name, path, text in direct]
+    else:
+        st, html, final = f.get(src.base + "/")
+        if st != 200:
+            print(f"[{src.label}] トップページを取得できませんでした({st})。市場全体のページは今回は取りません。", flush=True)
+            return None
+        top = parse_html(html)
+        cands = src.market_pages(top["anchors"], 15)
     pages, margin_tables = [], []
     for name, url, text in cands:
         st, body, fin = f.get(url)
@@ -559,7 +577,7 @@ def archive_market(src: Source, f: Fetcher, opts, raw: dict[str, bytes], year_hi
             parsed = parse_html(body)
             page["title"], page["tables"] = parsed["title"], parsed["tables"]
             seen, bodies = {url, fin}, {hash(body)}
-            more = src.follow_links(parsed["links"], fin, seen)[: opts.max_follow]
+            more = [] if direct else src.follow_links(parsed["links"], fin, seen)[: opts.max_follow]
             for k, murl in enumerate(more):
                 st2, body2, _ = f.get(murl)
                 if st2 != 200 or hash(body2) in bodies:
@@ -607,6 +625,7 @@ def main() -> int:
     ap.add_argument("--release-tag", default="")
     ap.add_argument("--fs-base", default=os.environ.get("FS_BASE", ""), help="Future Sight の配信元(既定は GitHub raw)")
     ap.add_argument("--no-market", action="store_true", help="市場全体のページ(東証全体の信用残など)を取らない")
+    ap.add_argument("--market-only", action="store_true", help="市場全体のページだけを取る(IRBANK は信用取引のページ1枚。銘柄は取らない)")
     opts = ap.parse_args()
     src: Source = SOURCES[opts.source]()
 
@@ -646,13 +665,13 @@ def main() -> int:
             return dt.datetime.fromisoformat(s["fetchedAt"]) < cutoff
         return False
 
-    todo = [c for c in codes if due(c)]
+    todo = [] if opts.market_only else [c for c in codes if due(c)]
     # 未取得 → 失敗 → 古い順
     todo.sort(key=lambda c: (c in index["stocks"], index["stocks"].get(c, {}).get("status") == "ok", index["stocks"].get(c, {}).get("fetchedAt", "")))
     total_ok = sum(1 for s in index["stocks"].values() if s.get("status") == "ok")
     print(f"[{src.label}] 対象 {len(codes)} 銘柄 / 今回 {len(todo)} 銘柄(mode={opts.mode}・間隔 {opts.delay}s・上限 {opts.max_minutes}分)", flush=True)
     mk = index.get("market") or {}
-    market_due = not opts.no_market and not explicit and (not mk.get("fetchedAt") or (cutoff is not None and dt.datetime.fromisoformat(mk["fetchedAt"]) < cutoff))
+    market_due = opts.market_only or not opts.no_market and not explicit and (not mk.get("fetchedAt") or (cutoff is not None and dt.datetime.fromisoformat(mk["fetchedAt"]) < cutoff))
     if not todo and not market_due:
         print(f"取得するものはありません(取得済み {total_ok} 銘柄)。{src.label} には接続しません。", flush=True)
         return 0

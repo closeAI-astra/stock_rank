@@ -6,7 +6,7 @@
   <meta name="robots" content="noindex, nofollow">
   <title>Stock Rank</title>
   <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
-  <link rel="stylesheet" href="assets/css/app.css?v=192575aca1">
+  <link rel="stylesheet" href="assets/css/app.css?v=91cecdd02e">
   <!-- テーマは Future Sight と同じ保存先(同じ github.io なら両方に効く)。読み込み前に当てて、ちらつきを防ぐ -->
   <script>try { if (localStorage.getItem("stockrank-sidebar") === "closed") document.documentElement.classList.add("sidebar-closed"); } catch { /* */ }</script>
   <script>try { const t = localStorage.getItem("future-sight-theme"); if (["light", "dark", "prototype", "earth"].includes(t)) document.documentElement.dataset.fsTheme = t; } catch { /* */ }</script>
@@ -119,6 +119,7 @@
       <div class="page-head"><p class="eyebrow">CREDIT RANKING</p><h1>ランキング・信用残</h1><p>stockAI の対象銘柄の信用倍率・買残/売残とその金額・推定の信用評価損益率を一覧にします。列の見出しを押すと並び替え。</p></div>
       <div id="rankProgress" class="progress" hidden><i></i><span></span></div>
       <div id="rankAgg"></div>
+      <div id="rankModel"></div>
       <div class="filters"><input id="rankFilter" type="search" placeholder="コード・名前で絞り込み"><select id="rankIndustry"><option value="">すべての業種</option></select><select id="rankMethod" title="評価損益率の推定方法"><option value="fifo6m">推定法: 先入れ先出し+6か月期日</option><option value="avg">推定法: 移動平均</option></select><label><input type="checkbox" id="rankNoWarm" checked> 履歴が半年未満の銘柄の損益率を除く</label><span id="rankCount" class="muted"></span></div>
       <div class="table-wrap tall"><table class="grid sortable" id="rankTable"></table></div>
       <p class="foot">金額 = 残高 × 申込日の終値。評価損益率は個別銘柄では公表されていないため、残高の増減と期間 VWAP から建玉の取得コストを追跡した<b>推定値</b>です(計算方法は「使い方」)。</p>
@@ -223,9 +224,10 @@
   <script src="assets/js/indicators.js?v=ab227dd66f"></script>
   <script src="assets/js/analytics.js?v=46ee895628"></script>
   <script src="assets/js/trades.js?v=215a726e0f"></script>
+  <script src="assets/js/marginmodel.js?v=e07992fd49"></script>
   <script src="assets/js/explore.js?v=e48161fdac"></script>
   <script src="assets/js/calendar.js?v=b45de4fd75"></script>
   <script src="assets/js/drawings.js?v=853bb759a2"></script>
-  <script src="assets/js/app.js?v=c67c58fbe1"></script>
+  <script src="assets/js/app.js?v=1f27dd1a30"></script>
 </body>
 </html>
