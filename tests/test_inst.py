@@ -63,6 +63,21 @@ class InstTest(unittest.TestCase):
         r = I.parse_large_csv(buf.getvalue())
         self.assertAlmostEqual(r["ratio"], 6.34); self.assertAlmostEqual(r["prevRatio"], 5.12); self.assertEqual(r["purpose"], "純投資")
 
+    def test_doc_list(self):
+        # 対象銘柄の書類だけを月ごとに残す(証券コード・提出者・発行者の EDINET コードのどれかで対象銘柄と分かるもの)
+        import tempfile
+        store = I.Store(Path(tempfile.mkdtemp()), b"k" * 32)
+        res = [{"docID": "S1", "docTypeCode": "120", "secCode": "72030", "edinetCode": "E02144", "filerName": "トヨタ", "submitDateTime": "2026-06-18 15:00"},
+               {"docID": "S2", "docTypeCode": "350", "secCode": None, "edinetCode": "E99999", "issuerEdinetCode": "E02144", "submitDateTime": "2026-07-01 09:00"},
+               {"docID": "S3", "docTypeCode": "120", "secCode": "99990", "edinetCode": "E88888", "submitDateTime": "2026-06-18 15:00"}]
+        n = I.save_doc_list(store, res, dt.date(2026, 6, 18), {"7203": {"edinet": "E02144"}}, {"E02144": "7203"})
+        self.assertEqual(n, 2)
+        self.assertEqual([d["docID"] for d in store.load("edinet/2026-06", None)["docs"]], ["S1"])
+        self.assertEqual(store.load("edinet/2026-07", None)["docs"][0]["code"], "7203")
+        # 同じ書類をもう一度読んでも重ならない
+        I.save_doc_list(store, res[:1], dt.date(2026, 6, 18), {"7203": {}}, {})
+        self.assertEqual(len(store.load("edinet/2026-06", None)["docs"]), 1)
+
     def test_merge_rows(self):
         out = I.merge_rows([{"date": "2026-01-02", "v": 1}], [{"date": "2026-01-02", "v": 2}, {"date": "2026-01-01", "v": 0}], lambda r: r["date"])
         self.assertEqual([r["v"] for r in out], [0, 2])

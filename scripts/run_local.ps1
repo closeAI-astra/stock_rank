@@ -1,18 +1,25 @@
-﻿# 自分の PC で株探・IRBANK を取得し、暗号化した data/ を GitHub に送る(Windows PowerShell)。
-# 株探(HTTP 405)も IRBANK(HTTP 403)も GitHub Actions からの接続を拒否するので、取得はこちらで実行する。
+﻿# 自分の PC で株探を取得し、暗号化した data/kabutan を GitHub に送る(Windows PowerShell)。株探は GitHub Actions からの接続を拒否する(HTTP 405)。
+#
+# ※ 2026-11 から、株探の決算・個別の信用残・株価は stockAI(Future Sight)が毎日取得したものを共有して使う(data/manifest.json)。
+#   同じものを二度取りに行かないよう、週次の取得はやめた。IRBANK も情報源として使わない(過去の保存分を読むだけ)。
+#   このスクリプトは、株探の過去の信用残をまとめて取り直したいときだけ使う:
 #
 #   cd stock_rank
-#   powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1                 # IRBANK(全銘柄・続きから)
-#   powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Codes 7203     # 1銘柄だけ試す
-#   powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Source kabutan -Mode full
+#   powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Mode full -Codes 7203   # 1銘柄だけ試す
+#   powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Mode full               # 全銘柄
 param(
-  [ValidateSet("irbank", "kabutan")][string]$Source = "irbank",
-  [ValidateSet("weekly", "full")][string]$Mode = "weekly",
+  [ValidateSet("kabutan")][string]$Source = "kabutan",
+  [ValidateSet("weekly", "full")][string]$Mode = "full",
   [string]$Codes = "",
   [double]$MaxMinutes = 300,
   [double]$Delay = 1.5,
-  [switch]$SavePassword   # 定期実行(register_weekly_task.ps1)のために、パスワードをこの PC に暗号化して保存する
+  [switch]$SavePassword,  # パスワードをこの PC に暗号化して保存する
+  [switch]$Force          # 週次(stockAI と重なる)でも実行する
 )
+if ($Mode -eq "weekly" -and -not $Force) {
+  Write-Host "株探の決算・信用残は stockAI が毎日取得していて、stock_rank はそれを使います。週次の取得は不要です(過去の信用残を取り直すときは -Mode full)。"
+  exit 0
+}
 $ErrorActionPreference = "Stop"
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
@@ -65,18 +72,6 @@ git add "data/$Source"
 git diff --cached --quiet
 if ($LASTEXITCODE -ne 0) {
   git commit -m "$Source archive (local) $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
-}
-# 株探の週次のついでに、IRBANK の「信用取引」のページ(東証・名証の信用残と信用評価損益率)を1枚だけ取る。
-# 信用評価損益率の推定モデルの答え合わせに使う。失敗しても株探の分は送る
-if ($Source -eq "kabutan" -and -not $Codes) {
-  & $py scripts\stock_archive.py --source irbank --market-only --raw-out "irbank-market-raw-$(Get-Date -Format yyyyMMdd-HHmm).tar.gz.enc"
-  if ($LASTEXITCODE -eq 0) {
-    git add "data/irbank"
-    git diff --cached --quiet
-    if ($LASTEXITCODE -ne 0) { git commit -m "irbank market (local) $(Get-Date -Format 'yyyy-MM-dd HH:mm')" }
-  } else {
-    Write-Warning "IRBANK の信用取引のページを取れませんでした(株探の分はこのまま送ります)"
-  }
 }
 # まだ GitHub に送っていない分(前回 push に失敗した分も含む)をまとめて送る。
 # 取得中に GitHub 側が進んでいる(定期取得のボットなど)と push は拒否されるので、取り込んでから送り直す

@@ -175,6 +175,28 @@ def parse_large_csv(raw: bytes) -> dict:
     return out
 
 
+# 対象銘柄の EDINET 書類一覧(全種類)を月ごとに残す。stockAI(有報 XBRL を取る側)が一覧の API を自分で呼ばずに済むように共有する
+DOC_LIST_FIELDS = ("docID", "docTypeCode", "ordinanceCode", "formCode", "edinetCode", "secCode", "filerName", "issuerEdinetCode", "subjectEdinetCode",
+                   "docDescription", "periodStart", "periodEnd", "submitDateTime", "parentDocID", "withdrawalStatus", "xbrlFlag", "pdfFlag", "csvFlag")
+
+
+def save_doc_list(store: Store, res: list[dict], day: dt.date, universe: dict, by_edinet: dict) -> int:
+    by_month: dict[str, list[dict]] = {}
+    for x in res:
+        sec = (x.get("secCode") or "")[:4]
+        code = sec if sec in universe else by_edinet.get(x.get("edinetCode") or "") or by_edinet.get(x.get("issuerEdinetCode") or "") or by_edinet.get(x.get("subjectEdinetCode") or "")
+        if not code or not x.get("docID"):
+            continue
+        row = {k: x.get(k) for k in DOC_LIST_FIELDS if x.get(k) not in (None, "")}
+        row["code"] = code
+        row["date"] = (x.get("submitDateTime") or day.isoformat())[:10]
+        by_month.setdefault(row["date"][:7], []).append(row)
+    for month, rows in by_month.items():
+        doc = store.load(f"edinet/{month}", {"month": month, "docs": []})
+        doc["docs"] = merge_rows(doc["docs"], rows, lambda r: r.get("docID"))
+    return sum(len(v) for v in by_month.values())
+
+
 def run_edinet(store: Store, index: dict, universe: dict, opts) -> dict:
     key = os.environ.get("EDINET_API_KEY", "").strip()
     if not key:
@@ -185,6 +207,8 @@ def run_edinet(store: Store, index: dict, universe: dict, opts) -> dict:
     today = dt.datetime.now(JST).date()
     last = index.get("edinetLastDate")
     start = (dt.date.fromisoformat(last) - dt.timedelta(days=3)) if last else today - dt.timedelta(days=opts.edinet_days)
+    if getattr(opts, "edinet_from", ""):
+        start = dt.date.fromisoformat(opts.edinet_from)  # 共有の書類一覧をさかのぼって作り直すとき
     days = [start + dt.timedelta(days=i) for i in range((today - start).days + 1)]
     n_large = n_bb = 0
     deadline = time.time() + opts.max_minutes * 60
@@ -202,6 +226,7 @@ def run_edinet(store: Store, index: dict, universe: dict, opts) -> dict:
             if str(data.get("metadata", {}).get("status")) in ("401", "403"):
                 return {"status": "failed", "reason": "API キーが無効"}
         res = (data or {}).get("results") or []
+        save_doc_list(store, res, day, universe, by_edinet)
         for x in res:
             t = x.get("docTypeCode")
             if x.get("withdrawalStatus") not in (None, "0") or x.get("disclosureStatus") not in (None, "0"):
@@ -821,6 +846,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="", help="jpx,jsf,edinet(空=全部)")
     ap.add_argument("--edinet-days", type=int, default=365, help="EDINET の初回にさかのぼる日数")
+    ap.add_argument("--edinet-from", default="", help="EDINET の書類一覧をこの日(YYYY-MM-DD)から取り直す(共有の一覧をさかのぼって作るとき)")
     ap.add_argument("--max-minutes", type=float, default=90)
     ap.add_argument("--delay", type=float, default=1.5)
     ap.add_argument("--out", default="data/inst")

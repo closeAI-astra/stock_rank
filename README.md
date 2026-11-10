@@ -78,53 +78,35 @@ EDINET は API キーが要ります。EDINET の API 利用登録で発行し�
 
 最初の観測は「その日の終値で建てた」と置くため、履歴の最初の約半年は参考値です。株式分割は、分割日の前後の残高の跳びから信用残が未調整かを判定して揃えます。
 
-## 株探・IRBANK の保存(GitHub Actions)
+## データの分担(stockAI と共有・二度取りしない)
 
-取得は `scripts/stock_archive.py --source kabutan|irbank` の1本で、取得元ごとにページの場所とページ送りだけが違います。
+同じデータを stock_rank と stockAI(Future Sight)の両方で取りに行かないよう、取得する側を1つに決め、もう一方はそれを読みます。一覧は [`data/manifest.json`](data/manifest.json)(暗号化なし)。
 
-| ワークフロー | 役割 | 取るもの | 頻度 |
-| --- | --- | --- | --- |
-| `kabutan-weekly.yml`(**Kabutan weekly**)/ PC の `register_weekly_task.ps1` | これからの定期取得 | `mode=weekly`: 信用残(`/stock/kabuka?code=…&ashi=shin` の1ページ目)・決算(`/stock/finance?code=…`、業績・配当)・銘柄トップ。信用残の履歴は日付で合わせて積み増す<br>`mode=full`: 上に加えて信用残の過去ページ・大株主など銘柄トップからリンクされたページ | PC のタスク スケジューラで毎週水曜 07:23(信用残は火曜夕方に前週金曜申込分が出る)。初回は `-Mode full` |
-| `irbank-archive.yml`(**IRBANK archive**)/ PC の `run_local.ps1` | 使えなくなる前の一度きりの保存 | 銘柄トップのリンクから見つけた個別ページ(信用残・空売り・貸借など)すべて | PC で実行。途中で止めても続きから。そろった後は接続しない |
+| 取得する側 | データ | 置き場所 |
+| --- | --- | --- |
+| stockAI | 株価・出来高・分割、株探の決算(日次)、個別の信用残(日次)、EDINET の有報、決算発表、指数・為替・金利、経済指標(信用評価損益率 JP_MARGIN_PL を含む)、貿易統計 | future.insight.stockAI.si の `data/*.json.enc` |
+| stock_rank | JPX の空売り残高報告・空売り比率(市場・業種)・裁定残・信用取引現在高(2002〜)・投資部門別、日証金の貸借・品貸料、EDINET の大量保有・自己株買付、EDINET の書類一覧(対象銘柄・全種類。`data/inst/edinet/{月}`。stockAI は有報 XBRL の docID をここから引けば一覧の API を呼ばずに済む) | このリポジトリの `data/inst/`(GitHub Actions の `inst-data.yml` で毎日) |
+| stock_rank | 金融政策の日程・相場のイベント・信用評価損益率の公表値 | `data/events/*.json`(暗号化なし) |
 
-保存先:
+どちらも同じ鍵・同じ形式の暗号化なので、[`scripts/shared_data.py`](scripts/shared_data.py) 1つで両方読めます(必要なのは `cryptography` だけ。stockAI 側にそのまま写して使える)。
 
-- ページごとの表と、正規化した信用残の履歴 → `data/{kabutan,irbank}/stocks/{コード}.json.enc`
-- 取得状況 → `data/{kabutan,irbank}/index.json.enc`
-- 生の HTML(暗号化 tar.gz)→ Release `kabutan-raw-*`(full のとき)・`irbank-raw-*`(復号は `scripts/decrypt_raw.py`)
-
-どちらも最初に取得元のトップページから「信用残・空売り・貸借・投資部門」などの文字のリンクを探し、市場全体のページを `data/{kabutan,irbank}/market.json.enc` に積み増します(指数のチャートの東証全体の信用残に使う)。IRBANK は EDINET コード側のページ(`/E02144/pl` など、財務の長い履歴)も取ります。
-
-準備と実行:
-
-1. Settings → Secrets and variables → Actions に `FS_PAGES_PASSWORD`(Future Sight のパスワード)を登録
-2. Actions → **IRBANK archive** → Run workflow(今のうちに一度)
-3. Actions → **Kabutan weekly** → Run workflow で `mode=full`(初回の取り込み)。以後は毎週自動
-
-1 回は最大約 5 時間で区切り、続きは次回に未取得の銘柄から再開します。取得に失敗した銘柄は、前回保存した良いデータを上書きしません。見つからない銘柄は 3 回失敗すると定期実行では諦めます。robots.txt に従い、間隔は既定 1.5 秒です。
-
-### 自分の PC で実行(株探・IRBANK とも)
-
-2026-10-26 に確認したところ、**株探(HTTP 405)も IRBANK(HTTP 403)も GitHub Actions からの接続を拒否**します(IRBANK は robots.txt の取得も拒否)。そのため取得は自分の PC で行います。拒否を回避するような細工(ブラウザを装う・別の経路を使う)はしていません。PC からも拒否される場合は、相手が許可していないということなので、そこで止めます。2つのワークフローは手動実行だけ残しています。
-
-```powershell
-git clone https://github.com/closeAI-astra/stock_rank.git   # 初回だけ
-cd stock_rank
-git switch claude/stockrank-page-dev-ndc53i
-
-# IRBANK(今のうちに一度だけ全部)。まず1銘柄で試してから全銘柄
-powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Codes 7203
-powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1
-
-# 株探: 初回は過去ページまで取り込み → 以後は毎週水曜 07:23 にタスク スケジューラで自動実行
-powershell -ExecutionPolicy Bypass -File scripts\run_local.ps1 -Source kabutan -Mode full
-powershell -ExecutionPolicy Bypass -File scripts\register_weekly_task.ps1
+```sh
+export FS_PAGES_PASSWORD=...                 # パスワードは環境変数で
+python scripts/shared_data.py --list         # 分担表
+python scripts/shared_data.py inst/market --out inst_market.json
+python scripts/shared_data.py inst/stocks/7203
+python scripts/shared_data.py market --source stockai   # stockAI 側
 ```
 
-- パスワードは実行時に聞かれます(画面に表示されません)。定期実行のために `register_weekly_task.ps1` が保存する場合は、Windows の DPAPI で暗号化して `%LOCALAPPDATA%\stock_rank\fs-password.txt` に置きます(その PC・そのユーザーでしか読めません)。
-- 取得した表は暗号化して `data/irbank/`・`data/kabutan/` に保存し、GitHub に送ります。生の HTML は暗号化した `*-raw-*.tar.gz.enc` として PC に残ります(GitHub には送りません)。
-- 途中で止めても、次の実行は未取得の銘柄から続けます。
-- 株探の週次(`-Source kabutan`)のついでに、IRBANK の「信用取引」のページ1枚(東証・名証の信用残と信用評価損益率)も取ります(`stock_archive.py --source irbank --market-only`)。信用評価損益率の推定モデルの答え合わせに使います。
+### 株探・IRBANK の保存(2026-10 までの一度きり。もう取得しない)
+
+`data/kabutan/`・`data/irbank/` は 2026-10 までに保存した個別ページの表と信用残の履歴です。IRBANK は情報源として使わず、株探の決算・信用残は stockAI と重なるので、定期取得はやめました(ワークフロー `kabutan-weekly.yml`・`irbank-archive.yml` と PC のタスク登録 `register_weekly_task.ps1` は削除)。過去の信用残を取り直したいときだけ、PC で `scripts\run_local.ps1 -Mode full`(株探)を実行します。
+
+PC に週次のタスクを登録していた場合は、止めておきます:
+
+```powershell
+Unregister-ScheduledTask -TaskName "StockRank Kabutan weekly" -Confirm:$false
+```
 
 ## 公開(GitHub Pages)
 

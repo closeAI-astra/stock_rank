@@ -29,6 +29,10 @@ on:
         description: "EDINET の初回にさかのぼる日数"
         required: false
         default: "365"
+      edinet_from:
+        description: "EDINET の書類一覧をこの日(YYYY-MM-DD)から取り直す(stockAI と共有する一覧をさかのぼって作るとき。空=続きから)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -57,7 +61,7 @@ jobs:
         env:
           FS_PAGES_PASSWORD: ${{ secrets.FS_PAGES_PASSWORD }}
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
-        run: python scripts/inst_data.py --only "${{ inputs.only }}" --edinet-days "${{ inputs.edinet_days || '365' }}" --max-minutes 90
+        run: python scripts/inst_data.py --only "${{ inputs.only }}" --edinet-days "${{ inputs.edinet_days || '365' }}" --edinet-from "${{ inputs.edinet_from }}" --max-minutes 90
       - name: Commit
         if: ${{ !cancelled() && (inputs.mode || 'update') == 'update' }}
         run: |

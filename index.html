@@ -148,7 +148,7 @@
 
     <!-- IRBANK 保存 -->
     <section class="view page" data-view="archive">
-      <div class="page-head"><p class="eyebrow">ARCHIVE</p><h1>保存データ(株探・IRBANK)</h1><p>GitHub Actions で取得し、同じパスワードで暗号化してこのリポジトリに保存したもの。<b>株探</b>は毎週の定期取得(信用残の週次を積み増す)、<b>IRBANK</b> は使えなくなる前の一度きりの保存です。</p></div>
+      <div class="page-head"><p class="eyebrow">ARCHIVE</p><h1>保存データ(株探・IRBANK)</h1><p>株探・IRBANK の個別ページを、同じパスワードで暗号化してこのリポジトリに保存したもの(2026-10 までの一度きり・もう更新しない)。これからの決算・信用残は stockAI が取得したものを、需給データはこのリポジトリが取得したものを使います(下の「データの分担」)。</p></div>
       <div id="archiveBody"></div>
     </section>
 
@@ -165,7 +165,8 @@
         <h2>データの出どころ</h2>
         <ul>
           <li>株価・株探/IRBANK の企業データ(決算・配当・財務・有報など)・信用残・貿易統計: <b>stockAI(Future Sight)</b> が公開している暗号化データを、このページがブラウザ内で復号して表示します。Future Sight と同じパスワードで開きます。</li>
-          <li>保存データ: このリポジトリの GitHub Actions が取得したものです。株探(<code>kabutan-weekly.yml</code>、毎週水曜の朝)が定期取得の本線で、IRBANK(<code>irbank-archive.yml</code>)は使えなくなる前の一度きりの保存です。信用残は、stockAI に無い日付だけを株探保存 → IRBANK保存の順でつなぎます。</li>
+          <li>機関の需給(JPX の空売り残高報告・空売り比率・裁定残・信用取引現在高・投資部門別、日証金の貸借、EDINET の大量保有・自己株買付): このリポジトリの GitHub Actions が毎日取得します。stockAI もこれを共有して使います(<code>data/manifest.json</code>)。</li>
+          <li>株探・IRBANK の保存データ: 2026-10 までの一度きりの保存で、もう取得しません。信用残は、stockAI に無い古い日付だけを株探保存 → IRBANK保存の順でつなぎます。</li>
           <li>チャート描画: TradingView の <a href="https://github.com/tradingview/lightweight-charts" target="_blank" rel="noopener">Lightweight Charts™</a>(Apache-2.0)。</li>
         </ul>
         <h2>チャートの操作</h2>
@@ -188,10 +189,9 @@
         <p>JPX などの公表ミスが分かっている日(現在は 2026-10-20 の日次信用残)は、表には ⚠ を付けて残し、前回比・金額・評価損益率・合計の計算から外します。</p>
         <p>最初の観測日は「その日の終値で建てた」と置くので、履歴の最初の約半年は 0% 寄りに出ます(表では薄く表示)。株式分割は、分割日の前後の残高の跳びから信用残が未調整かを自動判定して、金額が連続するように揃えます。一般信用・貸借の区別、現引き・現渡しは残高からは分からないため、あくまで目安です。</p>
         <p>全銘柄合計の推定損益率は、各銘柄の金額とコストを足し合わせてから割ったもの(金額加重)です。</p>
-        <h2>株探・IRBANK の保存</h2>
-        <p><b>株探(これから)</b>: 自分の PC のタスク スケジューラ(<code>scripts\register_weekly_task.ps1</code> で登録)が毎週水曜の朝に動き、Future Sight の対象銘柄の信用残(週次)・決算(業績・配当)・銘柄トップを取って、信用残の履歴を積み増します。初回は手動で <code>mode=full</code> にすると、信用残の過去ページや大株主などのページもまとめて取ります。</p>
-        <p><b>IRBANK(今回だけ)</b>: 自分の PC で <code>scripts\run_local.ps1</code> を一度実行すると、信用残・空売り・貸借などの個別ページをすべて保存します。途中で止まっても毎日続きを取り、全銘柄そろった後は IRBANK に接続しません。</p>
-        <p>株探・IRBANK とも GitHub のサーバーからの接続を拒否するため、取得は自分の PC で行います(手順は README「自分の PC で実行」)。</p>
+        <h2>データの分担(stockAI と二度取りしない)</h2>
+        <p>同じデータを stock_rank と stockAI の両方で取りに行かないよう、取得する側を1つに決めています。株価・株探の決算・個別の信用残・EDINET の有報・経済指標は stockAI が取得し、stock_rank はそれを読みます。JPX・日証金・EDINET(大量保有・自己株買付)の需給データは stock_rank が取得し、stockAI はそれを読みます。一覧は <code>data/manifest.json</code>、読み方は <code>scripts/shared_data.py</code>。</p>
+        <p>株探・IRBANK の個別ページの保存は 2026-10 までの一度きりで、もう取得しません(IRBANK は情報源として使わない)。</p>
         <p class="muted">表示している数値は情報提供のためのもので、投資助言ではありません。</p>
       </div>
     </section>
@@ -228,6 +228,6 @@
   <script src="assets/js/explore.js?v=e48161fdac"></script>
   <script src="assets/js/calendar.js?v=b45de4fd75"></script>
   <script src="assets/js/drawings.js?v=853bb759a2"></script>
-  <script src="assets/js/app.js?v=1f27dd1a30"></script>
+  <script src="assets/js/app.js?v=578d3372d2"></script>
 </body>
 </html>

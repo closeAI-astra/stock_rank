@@ -1678,7 +1678,7 @@
   }
   function tabSaved(d, cur) {
     const have = ARCHIVE_SOURCES.filter(([k]) => cur.archives?.[k]);
-    if (!have.length) return `<div class="empty">${cur.code === "market" ? "市場全体" : "この銘柄"}の保存データはまだありません。<br><small>GitHub Actions の「Kabutan weekly」(毎週の株探)・「IRBANK archive」(一度きり)を実行すると、ここに信用残の履歴やページの表が入ります(「保存データ」ページを参照)。</small></div>`;
+    if (!have.length) return `<div class="empty">${cur.code === "market" ? "市場全体" : "この銘柄"}の保存データはまだありません。<br><small>株探・IRBANK の保存は 2026-10 までの一度きりで、この銘柄の分はありません。これからの決算・信用残は stockAI が毎日取得したものを使います(「保存データ」ページを参照)。</small></div>`;
     const srcKey = have.some(([k]) => k === S.savedSrc) ? S.savedSrc : have[0][0];
     const srcLabel = { kabutan: "株探", irbank: "IRBANK" }[srcKey];
     const a = cur.archives[srcKey];
@@ -2400,15 +2400,13 @@
       body.innerHTML = '<p class="muted pad">読み込み中…</p>';
       await Promise.all(need.map(async ([k]) => { S.archiveIndex[k] = await SRData.own(`${k}/index`).catch(() => null); }));
     }
-    const how = `<section class="panel prose"><h3>取得のしかた</h3><ol>
-      <li>株探・IRBANK とも GitHub のサーバーからの取得を拒否するため、取得は自分の PC で行います(README「自分の PC で実行」)。パスワードは実行時に入力します。</li>
-      <li><b>株探(これからの定期取得・自分の PC で)</b>: 株探は GitHub Actions からの接続を拒否(HTTP 405)するので、PC で <code>scripts\\run_local.ps1 -Source kabutan -Mode full</code> を一度実行し、<code>scripts\\register_weekly_task.ps1</code> で毎週水曜の朝の自動実行を登録します。全銘柄の信用残(週次)・決算・銘柄トップを取り、信用残の履歴を積み増します。</li>
-      <li><b>IRBANK(今回だけ・自分の PC で)</b>: IRBANK は GitHub Actions からの接続を拒否(HTTP 403)するので、自分の PC で <code>scripts\\run_local.ps1</code> を実行します(README「自分の PC で実行」)。使えなくなる前に、信用残・空売り・貸借などの個別ページを一度だけ全部保存します。途中で止めても、次の実行は未取得の銘柄から続けます。取得した表は暗号化して GitHub に送られ、このページに反映されます。</li>
-      <li>表は JSON にして <code>data/kabutan/</code>・<code>data/irbank/</code> に暗号化して保存し、生の HTML は暗号化した tar を GitHub Release に置きます。</li></ol>
-      <p class="muted">相手のサーバーへの負荷を抑えるため、robots.txt に従い、リクエストの間隔は既定で 1.5 秒以上あけています。</p></section>`;
+    const how = `<section class="panel prose"><h3>データの分担(二度取りしない)</h3><ol>
+      <li><b>stockAI(Future Sight)が取るもの</b>: 株価・株探の決算・個別の信用残(日次)・EDINET の有報・経済指標。stock_rank は取得せず、stockAI が公開している暗号化データを読みます。</li>
+      <li><b>stock_rank が取るもの</b>: JPX の空売り残高報告・空売り比率・裁定残・信用取引現在高・投資部門別、日証金の貸借・品貸料、EDINET の大量保有・自己株買付(GitHub Actions で毎日)。stockAI はこれを <code>data/manifest.json</code> の場所から読みます(<code>scripts/shared_data.py</code>)。</li>
+      <li><b>株探・IRBANK の保存</b>: 2026-10 までの一度きりの保存です。もう取得しません(IRBANK は情報源として使わない・株探の決算と信用残は stockAI と重なるため)。過去の信用残の履歴として、stockAI に無い日付だけをつなぎます。</li></ol></section>`;
     const section = ([key, label]) => {
       const ix = S.archiveIndex[key]; const name = label.replace("保存", "");
-      const role = key === "kabutan" ? "毎週の定期取得" : "一度きりの保存";
+      const role = "2026-10 までの保存・もう更新しない";
       if (!ix) return `<section class="panel"><div class="row-head"><h3>${esc(name)}(${role})</h3></div>${empty("まだ保存データがありません(ワークフローが一度も成功していません)。")}</section>`;
       const stocks = Object.entries(ix.stocks || {}).sort((a, b) => a[0].localeCompare(b[0]));
       const done = stocks.filter(([, s]) => s.status === "ok").length;

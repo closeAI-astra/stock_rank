@@ -1,0 +1,163 @@
+{
+  "note": "stock_rank と stockAI(Future Sight)のデータの分担表。同じものを両方で取りに行かないよう、取得する側を1つに決めて、もう一方はここに書いた場所から読む。.json.enc は Future Sight と同じ鍵・形式の暗号化(scripts/shared_data.py で読める)。暗号化していない .json はそのまま読める",
+  "updated": "2026-11-10",
+  "encryption": "PBKDF2-SHA256(Future Sight のパスワード, future.insight.stockAI.si の enc-meta.json の salt と iter) → AES-256-GCM。中身は 先頭12バイトの IV + 暗号文(gzip した JSON)",
+  "provides": {
+    "title": "stock_rank が取得して置いているもの(stockAI はここから読む。取得しなくてよい)",
+    "base": "https://raw.githubusercontent.com/closeAI-astra/stock_rank/claude/stockrank-page-dev-ndc53i/",
+    "datasets": [
+      {
+        "name": "JPX 信用取引現在高(市場全体)",
+        "path": "data/inst/market.json.enc の margin",
+        "updates": "週次(GitHub Actions・平日に毎日確認)",
+        "from": "JPX 信用取引現在高(東京・名古屋)。2002-08 からの週次",
+        "fields": "date(申込日), buy, sell(株), buyAmount, sellAmount(円), buyStdShares, buyNegShares(制度・一般), ratio"
+      },
+      {
+        "name": "JPX 空売り比率(市場・業種別)",
+        "path": "data/inst/market.json.enc の shortRatio, shortSectors",
+        "updates": "日次",
+        "from": "JPX 空売り集計",
+        "fields": "shortRatio: [{date, ratio(価格規制あり+なし ÷ 売買代金), restrictedShare, real, restricted, unrestricted, total}] / shortSectors: {date: {業種名: 空売り比率}}"
+      },
+      {
+        "name": "JPX 裁定取引残高",
+        "path": "data/inst/market.json.enc の arbitrage",
+        "updates": "週次",
+        "from": "JPX 裁定取引に係る現物ポジション",
+        "fields": "date, buy, sell(arbitrageUnit の単位), buyAmount, sellAmount"
+      },
+      {
+        "name": "JPX 投資部門別売買状況",
+        "path": "data/inst/market.json.enc の investor",
+        "updates": "週次(木曜)",
+        "from": "JPX 投資部門別売買状況(二市場・金額)",
+        "fields": "weekEnd, unit(億円), groups: [{kind, top(海外投資家・個人・信託銀行…), mid, sub, sell, buy, net}]"
+      },
+      {
+        "name": "JPX 空売り残高報告(個別・0.5% 以上)",
+        "path": "data/inst/stocks/{コード}.json.enc の shorts",
+        "updates": "日次(公表は計算日の翌々営業日)",
+        "from": "JPX 空売り残高に関する情報",
+        "fields": "date(計算日), holder, client, fund, ratio(%), shares, prevDate, prevRatio"
+      },
+      {
+        "name": "日証金 貸借残高・品貸料(個別)",
+        "path": "data/inst/stocks/{コード}.json.enc の lending, jsfRestrict",
+        "updates": "日次(速報・確報)",
+        "from": "日本証券金融 zandaka.csv / shina.csv / seigenichiran.csv",
+        "fields": "lending: [{date, kind(速報/確報), loan(融資残), lend(貸株残), net, loanNew, loanRepay, lendNew, lendRepay, ratio(貸借倍率), fee(品貸料), feeDays}] / jsfRestrict: 申込停止・注意喚起"
+      },
+      {
+        "name": "EDINET 大量保有報告書・自己株券買付状況報告書(個別)",
+        "path": "data/inst/stocks/{コード}.json.enc の large, buyback",
+        "updates": "日次",
+        "from": "EDINET API v2(書類一覧と CSV)",
+        "fields": "large: [{date, filer, docID, desc, ratio, prevRatio, purpose}] / buyback: [{date, docID, desc, filer}]"
+      },
+      {
+        "name": "EDINET 書類一覧(対象銘柄・全種類)",
+        "path": "data/inst/edinet/{YYYY-MM}.json.enc",
+        "updates": "日次(提出日の月ごとのファイル)",
+        "from": "EDINET API v2 documents.json(type=2)。有報・四半期報告・臨時報告・大量保有などすべての書類種別",
+        "fields": "month, docs: [{docID, date(提出日), code(4桁), docTypeCode, ordinanceCode, formCode, edinetCode, secCode, filerName, issuerEdinetCode, subjectEdinetCode, docDescription, periodStart, periodEnd, submitDateTime, parentDocID, withdrawalStatus, xbrlFlag, pdfFlag, csvFlag}]。有報 XBRL などの本体は docID で EDINET から取る"
+      },
+      {
+        "name": "取得の記録",
+        "path": "data/inst/index.json.enc",
+        "updates": "取得のたび",
+        "from": "scripts/inst_data.py",
+        "fields": "updatedAt, runs: 取得元ごとの結果, jsfLastDate, edinetLastDate など"
+      },
+      {
+        "name": "金融政策の日程",
+        "path": "data/events/policy.json(暗号化なし)",
+        "updates": "手で更新",
+        "from": "日銀・FRB の公表日程",
+        "fields": "events: [{date, title, note, strong}]"
+      },
+      {
+        "name": "相場のイベント(Claude の調査)",
+        "path": "data/events/claude.json(暗号化なし)",
+        "updates": "週次(日曜。Claude の定期タスク)",
+        "from": "公開情報。出典つき",
+        "fields": "updatedAt, events: [{date, kind, title, note, source}]"
+      },
+      {
+        "name": "信用評価損益率(買い方・2市場)の公表値",
+        "path": "data/events/margin_pl.json(暗号化なし)",
+        "updates": "週次",
+        "from": "公開されている記事・データページ(出典つき)。stockAI の経済指標 JP_MARGIN_PL とも合わせて使う",
+        "fields": "values: [{date(申込日), value(%), source}]"
+      },
+      {
+        "name": "株探・IRBANK の過去の保存分(もう更新しない)",
+        "path": "data/kabutan/, data/irbank/",
+        "updates": "更新なし(2026-10 までの一度きりの保存)",
+        "from": "株探・IRBANK の個別ページ",
+        "fields": "stocks/{コード}.json.enc: margin(信用残の履歴), pages(保存した表)"
+      }
+    ]
+  },
+  "consumes": {
+    "title": "stockAI(Future Sight)が取得しているもの(stock_rank はここから読む。取得しない)",
+    "base": "https://raw.githubusercontent.com/closeAI-astra/future.insight.stockAI.si/main/",
+    "datasets": [
+      {
+        "name": "日足の株価・出来高・分割",
+        "path": "data/chart-chunks/*.json.enc(chart-index で引く)",
+        "updates": "日次",
+        "from": "Yahoo Finance(stockAI)"
+      },
+      {
+        "name": "個別の信用残",
+        "path": "data/stock-detail/*.json.enc の credit",
+        "updates": "日次(2026-09-25 から。それ以前は週次)",
+        "from": "JPX(stockAI)"
+      },
+      {
+        "name": "株探の決算(通期・四半期・半期・財務)",
+        "path": "data/stock-detail/*.json.enc の kabutan",
+        "updates": "日次 16:00",
+        "from": "株探(stockAI)"
+      },
+      {
+        "name": "EDINET 有価証券報告書の項目",
+        "path": "data/stock-detail/*.json.enc の edinet",
+        "updates": "提出のたび",
+        "from": "EDINET XBRL(stockAI)",
+        "note": "書類一覧は stock_rank の data/inst/edinet を使えば、一覧の API を呼ばずに済む"
+      },
+      {
+        "name": "決算発表",
+        "path": "data/earnings.json.enc",
+        "updates": "日次",
+        "from": "株探・TDnet(stockAI)"
+      },
+      {
+        "name": "指数・為替・金利",
+        "path": "data/index-pages.json.enc",
+        "updates": "日次",
+        "from": "Yahoo Finance(stockAI)"
+      },
+      {
+        "name": "経済指標・発表(信用評価損益率 JP_MARGIN_PL を含む)",
+        "path": "data/econ.json.enc",
+        "updates": "日次",
+        "from": "FRED・e-Stat・各種発表(stockAI)"
+      },
+      {
+        "name": "市場の集計(対象銘柄の信用残合計など)",
+        "path": "data/market.json.enc",
+        "updates": "日次",
+        "from": "stockAI"
+      },
+      {
+        "name": "貿易統計・マクロ",
+        "path": "data/macro.json.enc",
+        "updates": "日次",
+        "from": "財務省ほか(stockAI)"
+      }
+    ]
+  }
+}
