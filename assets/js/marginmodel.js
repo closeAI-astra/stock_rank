@@ -162,11 +162,38 @@
       return { ...r, offDate: o?.date || p?.date || null, offRatio: offR, ratioErr: offR !== null && fin(r.ratio) ? r.ratio - offR : null, offPl: p ? p.y : null, plErr: p && fin(r.pl) ? r.pl - p.y : null };
     });
   }
+  // 毎営業日の推定(公表の無い日のおおよその値)。各日について、その日より前に出ていた公表値だけを使う(先を見ない)。
+  //   評価損益率 = 直近の公表値 + b × (その日の x − 公表日の x)。b はその時点までの公表値の週ごとの変化から(2組未満なら 1。週ごとの検証 fitX と同じ)
+  //   信用倍率 = その日の全銘柄の合計 × 比(その日より前の週の 公表値 ÷ 合計 の中央値。無ければ 1)
+  //   公表日そのものの行は、前の公表値からの推定と、公表値を並べる(答え合わせ)
+  function dailyEstimates(daily, targets, official) {
+    const dd = cleanDaily(daily); const tg = (targets || []).filter((o) => fin(o.y)).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const xm = new Map(dd.filter((r) => fin(r.pl_buy_link)).map((r) => [r.date, r.pl_buy_link]));
+    const off = (official || []).filter((o) => fin(o.buy) && fin(o.sell) && o.sell > 0).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const dm = new Map(dd.map((r) => [r.date, r]));
+    return dd.map((r) => {
+      const d = r.date;
+      // 評価損益率
+      const known = tg.filter((o) => o.date < d && xm.has(o.date));
+      let pl = null, anchor = null, b = null;
+      if (known.length && xm.has(d)) {
+        const pairs = known.slice(1).map((o, i) => [xm.get(o.date) - xm.get(known[i].date), o.y - known[i].y]);
+        const sxx = pairs.reduce((a, p) => a + p[0] * p[0], 0);
+        b = pairs.length >= 2 && sxx > 0 ? pairs.reduce((a, p) => a + p[0] * p[1], 0) / sxx : 1;
+        anchor = known.at(-1); pl = anchor.y + b * (xm.get(d) - xm.get(anchor.date));
+      }
+      // 信用倍率
+      const prevW = off.filter((o) => o.date < d && dm.has(o.date));
+      const fb = median(prevW.map((o) => o.buy / dm.get(o.date).buy_sh)) ?? 1, fs = median(prevW.map((o) => o.sell / dm.get(o.date).sell_sh)) ?? 1;
+      const offT = tg.find((o) => o.date === d), offR = off.find((o) => o.date === d);
+      return { date: d, ratio: (r.buy_sh * fb) / (r.sell_sh * fs), ratioOff: offR ? offR.buy / offR.sell : null, pl, plOff: offT ? offT.y : null, anchor: anchor?.date || null, anchorY: anchor ? anchor.y : null, b, x: xm.get(d) ?? null };
+    });
+  }
   // 全銘柄の約定金額ベースの評価損益率(つないだ系列)を、日付 → {x} で引けるようにする
   function linkSeries(daily) { const m = new Map(cleanDaily(daily).filter((r) => fin(r.pl_buy_link)).map((r) => [r.date, { x: r.pl_buy_link, n: r.n_priced }])); return (d) => m.get(d) || null; }
   // 指数(TOPIX など)の対数 × 100。その日以前で7日以内の終値
   function logIndex(rows) { const r = (rows || []).filter((x) => fin(x.c) && x.c > 0).sort((a, b) => (a.d < b.d ? -1 : 1)); return (d) => { const j = lastIdx(r, "d", d); if (j < 0 || t(d) - t(r[j].d) > 7 * DAY) return null; return { x: 100 * Math.log(r[j].c) }; }; }
 
-  const api = { parseIrbank, mergeTargets, prepRows, simulate, build, xAt, fit, fitX, score, nowcast, nowcastX, cleanDaily, ratioCheck, ratioNowcast, gradeNowcasts, linkSeries, logIndex, monday, friday };
+  const api = { parseIrbank, mergeTargets, prepRows, simulate, build, xAt, fit, fitX, score, nowcast, nowcastX, cleanDaily, ratioCheck, ratioNowcast, gradeNowcasts, dailyEstimates, linkSeries, logIndex, monday, friday };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.SRMargin = api;
 })(typeof window !== "undefined" ? window : globalThis);

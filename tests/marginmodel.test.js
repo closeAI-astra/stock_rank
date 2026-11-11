@@ -76,3 +76,14 @@ assert.strictEqual(g[1].offRatio, null); assert.strictEqual(g[1].plErr, null);
 const li = M.logIndex([{ d: "2026-01-02", c: 100 }, { d: "2026-01-09", c: 110 }]);
 assert.ok(Math.abs(li("2026-01-12").x - 100 * Math.log(110)) < 1e-9); assert.strictEqual(li("2026-02-01"), null);
 console.log("marginmodel (全銘柄) ok");
+
+// 毎営業日の推定: 先を見ない(その日より前の公表値だけ)。公表日の行は推定と公表値を並べる
+const de = M.dailyEstimates(fx.daily, fx.pl, fx.official);
+assert.ok(!de.some((r) => r.date === "2026-10-20")); // JPX の集計ミスの日は推定しない
+const d1106 = de.find((r) => r.date === "2026-11-06"), d1109 = de.find((r) => r.date === "2026-11-09");
+assert.strictEqual(d1106.anchor, "2026-10-30"); assert.strictEqual(d1106.plOff, -21.08);
+assert.strictEqual(d1109.anchor, "2026-11-06"); assert.ok(Math.abs(d1109.pl - (-21.08 + d1109.b * (-19.551 + 21.303))) < 1e-9);
+assert.ok(d1109.b > 0.7 && d1109.b < 0.9, String(d1109.b));
+const d0925 = de.find((r) => r.date === "2026-09-25"); assert.strictEqual(d0925.pl, null); // それより前の公表値が無い
+assert.ok(Math.abs(de.find((r) => r.date === "2026-10-30").ratio - 3654854000 / 349230000) < 0.005);
+console.log("marginmodel (毎日) ok");

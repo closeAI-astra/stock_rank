@@ -1829,7 +1829,7 @@
         ${graded.slice(0, 20).map((g) => `<tr><th>${esc(String(g.madeAt || "").slice(0, 16).replace("T", " "))}</th><td>${esc(g.basisDate)}</td><td>${esc(g.targetDate)}</td><td>${r3(g.ratio)}</td><td>${r3(g.offRatio)}</td><td>${g.ratioErr === null ? "未公表" : `${g.ratioErr >= 0 ? "+" : ""}${g.ratioErr.toFixed(3)}`}</td><td>${num(g.pl) === null ? "—" : `${g.pl.toFixed(2)}%`}</td><td>${num(g.offPl) === null ? "—" : `${g.offPl.toFixed(2)}%`}</td><td>${g.plErr === null ? "未公表" : `${g.plErr >= 0 ? "+" : ""}${g.plErr.toFixed(2)}pt`}</td></tr>`).join("")}
       </tbody></table></div><p class="foot">stockAI が公表の前に推定を記録し(data/shinyo/market_nowcast_log.csv。追記だけで書き換えない)、公表後にここで突き合わせます。</p></details>` : ""}
       <p class="foot">全銘柄の合計は東証だけ(公表値は東京+名古屋)。比(公表値 ÷ 合計)はそれまでの週の中央値で、いまは買残 ${((chk.fb - 1) * 100).toFixed(3)}%・売残 ${((chk.fs - 1) * 100).toFixed(3)}% だけ公表値が大きい(名古屋の分)。
-        週の途中の推定は「今の値のまま」で、幅は過去の同じ日数の動き(信用倍率の対数の変化)から付けています。${sus.length ? `次の日は全体の買残が一時的に大きくずれて翌日に戻ったため使っていません: ${sus.map(esc).join("、")}。` : ""}
+        週の途中の推定は「今の値のまま」で、幅は過去の同じ日数の動き(信用倍率の対数の変化)から付けています。${sus.length ? `次の日は JPX が集計ミスのある値をそのまま公表しているため使っていません: ${sus.map(esc).join("、")}。` : ""}
         元データ: ${esc(cm.source || "")}(stockAI の scripts/build_margin_market.py)。</p></section>`;
     RM.chart?.remove(); RM.chart = null;
     const el = $("#rmChart"); if (!el) return;
@@ -1882,10 +1882,18 @@
     const evalW = new Set((pdf?.weekly || []).filter((o) => o.pred !== null).map((o) => o.date));
     const same = evalW.size ? [["前回の公表値のまま", SRMargin.score(pdf.weekly, evalW), true], [`推定 x(建て替え ${Math.round(MM.kg * 100)}%/週)`, SRMargin.score(model.weekly, evalW)], ["TOPIX の騰落", SRMargin.score(tpx.weekly, evalW)], ["全銘柄の約定金額", SRMargin.score(pdf.weekly, evalW)]] : [];
     const pcur = pdfNow.at(-1), plast = pdf?.weekly.at(-1);
+    // 毎営業日の推定(公表の無い日のおおよその値。その日より前の公表値だけを使う)
+    const dailyEst = cmDaily.length ? SRMargin.dailyEstimates(cmDaily, targets, (S.instMarket?.margin || []).filter((r) => num(r.buy) !== null && num(r.sell))) : [];
     const last = model.weekly.at(-1), cur = now.at(-1), lastT = targets.at(-1);
     const f2 = (v) => (v === null || v === undefined ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`);
     const cnt = (k) => targets.filter((o) => o.src.startsWith(k)).length;
     const pdfCard = pcur ? `<article><span>全銘柄の約定金額からの推定(${esc(pcur.date)})</span><strong class="${cls(pcur.y)}">${f2(pcur.y)}</strong><em>= ${esc(plast.date)} の公表値 ${f2(plast.y)} + b ${pdf.b?.toFixed(2)} × 変化 ${pcur.x - plast.x >= 0 ? "+" : ""}${(pcur.x - plast.x).toFixed(2)}pt · 95% の幅 ${pcur.lo.toFixed(1)}〜${pcur.hi.toFixed(1)}% · 検証 ${pdf.nEval}週の誤差 ${pdf.mae?.toFixed(2) ?? "—"}pt</em></article>` : "";
+    const jpxErr = cmDaily.filter((r) => r.suspect).map((r) => r.date);
+    const dailyTable = dailyEst.length ? `<div class="row-head"><h3>毎日の推定(信用倍率・評価損益率)</h3><small>公表は週1回(金曜申込分を翌週に)。その間の日のおおよその値を、全銘柄の毎日の信用残から出します。各日の値は、その日より前に出ていた公表値だけを使っています(先を見ない)</small></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>信用倍率の推定</th><th>公表値</th><th>評価損益率の推定</th><th>公表値</th><th>元にした公表値</th><th>b</th></tr></thead><tbody>
+        ${dailyEst.slice().reverse().slice(0, 40).map((r) => `<tr class="${r.plOff !== null || r.ratioOff !== null ? "sel" : ""}"><th>${esc(r.date)}</th><td>${r.ratio.toFixed(2)}倍</td><td>${r.ratioOff === null ? "" : `${r.ratioOff.toFixed(2)}倍`}</td><td class="${cls(r.pl)}">${r.pl === null ? "—" : f2(r.pl)}</td><td>${r.plOff === null ? "" : f2(r.plOff)}</td><td>${r.anchor ? `${esc(r.anchor)}(${f2(r.anchorY)})` : "—"}</td><td>${r.b === null ? "—" : r.b.toFixed(2)}</td></tr>`).join("")}
+      </tbody></table></div>
+      <p class="foot">評価損益率の推定 = 元にした公表値 + b × (その日の全銘柄の約定金額ベースの評価損益率 − 公表日の値)。信用倍率の推定 = その日の全銘柄の合計 × 名古屋の分の比。${jpxErr.length ? `${jpxErr.map(esc).join("、")} は JPX が集計ミスのある値をそのまま公表しているため、推定を出していません。` : ""}</p>` : "";
     const pdfTables = same.length ? `<div class="row-head"><h3>同じ週で比べる(全銘柄の約定金額がある ${evalW.size}週)</h3><small>全銘柄の信用残の PDF は 2026-09-25 からなので週が少なく、差は偶然の範囲かもしれません。公表前の推定は stockAI が記録しているので(上の「信用倍率」の答え合わせ)、週が増えたら見直してください</small></div>
       <div class="table-wrap"><table class="grid"><thead><tr><th>前回の公表値 + b × …</th><th>平均の誤差</th><th>二乗平均の誤差</th><th>向きの的中</th></tr></thead><tbody>
         ${same.map(([l, c, naive]) => `<tr><th>${esc(l)}</th><td>${(naive ? c.maeNaive : c.mae)?.toFixed(2) ?? "—"}pt</td><td>${(naive ? c.rmseNaive : c.rmse)?.toFixed(2) ?? "—"}pt</td><td>${naive || c.hit === null ? "—" : `${Math.round(c.hit * 100)}%`}</td></tr>`).join("")}
@@ -1893,7 +1901,7 @@
       <details class="mm-detail"><summary>全銘柄の約定金額ベースの週ごとの推定</summary><div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>公表値</th><th>推定(先を見ない)</th><th>誤差</th><th>全銘柄の約定金額ベースの x</th><th>b</th></tr></thead><tbody>${pdf.weekly.slice().reverse().map((o) => `<tr><th>${esc(o.date)}</th><td>${f2(o.y)}</td><td>${o.pred === null ? "—" : f2(o.pred)}</td><td>${o.pred === null ? "—" : `${(o.pred - o.y >= 0 ? "+" : "")}${(o.pred - o.y).toFixed(2)}`}</td><td>${f2(o.x)}</td><td>${o.b === undefined || o.b === null ? "—" : o.b.toFixed(2)}</td></tr>`).join("")}</tbody></table></div>
         <p class="foot">x = 株価のある銘柄(買残の金額の約7割。全銘柄の株価は不定期にしか取っていない)での「Σ 買残株数 × 終値 ÷ Σ 買残金額(約定ベース) − 1」を、前日と今日の両方で株価のある銘柄だけで日々の変化を測ってつないだ値。公表値(日経)とは水準も動きの大きさも少し違い(b ≈ 0.8)、理由はまだ分かっていません。</p></details>` : "";
     box.innerHTML = `<section class="panel"><div class="row-head"><h3>信用評価損益率(買い方・2市場)の推定</h3><small>日経などが毎週公表する東証・名証の信用買い方の評価損益率を、stockAI 対象銘柄の毎日の信用残から推定します。公表は申込日(金曜)の翌週。公表を待たずに、毎営業日の終値で今週の値を推定します</small></div>
-      ${model.n < 15 ? `${empty(`対象銘柄の推定 x と公表値が重なる期間が短すぎます(${model.n}週)。`)}${pdfCard ? `<div class="cards">${pdfCard}</div><div id="mmChart" class="mini-chart tall-chart"></div>` : ""}${pdfTables}` : `<div class="cards">
+      ${model.n < 15 ? `${empty(`対象銘柄の推定 x と公表値が重なる期間が短すぎます(${model.n}週)。`)}${pdfCard ? `<div class="cards">${pdfCard}</div><div id="mmChart" class="mini-chart tall-chart"></div>` : ""}${pdfTables}${dailyTable}` : `<div class="cards">
         <article><span>最新の公表値</span><strong class="${cls(lastT?.y)}">${f2(lastT?.y)}</strong><em>${esc(lastT?.date || "")} 申込分 · ${esc(lastT?.src || "")}</em></article>
         ${cur ? `<article><span>推定(${esc(cur.date)} の終値まで)</span><strong class="${cls(cur.y)}">${f2(cur.y)}</strong><em>95% の幅 ${cur.lo.toFixed(1)}〜${cur.hi.toFixed(1)}% · 公表日から ${Math.round(cur.weeks * 10) / 10}週</em></article>
         <article><span>前回の公表からの推定変化</span><strong class="${cls(cur.y - last.y)}">${cur.y - last.y >= 0 ? "+" : ""}${(cur.y - last.y).toFixed(2)}pt</strong><em>= b ${model.b?.toFixed(2)} × 対象銘柄の推定の変化 ${cur.x - last.x >= 0 ? "+" : ""}${(cur.x - last.x).toFixed(2)}pt</em></article>`
@@ -1910,6 +1918,7 @@
         <tr><th>前回値 + b × TOPIX の騰落(素朴な比較相手)</th><td>${tpx.mae?.toFixed(2) ?? "—"}pt</td><td>${tpx.rmse?.toFixed(2) ?? "—"}pt</td><td>${tpx.hit === null ? "—" : `${Math.round(tpx.hit * 100)}%`}</td><td>${tpx.b?.toFixed(2) ?? "—"}</td></tr>
       </tbody></table></div>
       ${pdfTables}
+      ${dailyTable}
 
       <details class="mm-detail"><summary>直近の週ごとの公表値と推定</summary><div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>公表値</th><th>推定(先を見ない)</th><th>誤差</th><th>対象銘柄の推定 x</th><th>出どころ</th></tr></thead><tbody>${model.weekly.slice(-20).reverse().map((o) => `<tr><th>${esc(o.date)}</th><td>${f2(o.y)}</td><td>${o.pred === null ? "—" : f2(o.pred)}</td><td>${o.pred === null ? "—" : `${(o.pred - o.y >= 0 ? "+" : "")}${(o.pred - o.y).toFixed(2)}`}</td><td>${f2(o.x)}</td><td>${esc(o.src)}</td></tr>`).join("")}</tbody></table></div></details>`}
       <details class="mm-detail"><summary>公表値を手で入れる(日経・証券会社の発表を見て)</summary>
@@ -1931,7 +1940,8 @@
     const pr = ln({ color: "#ffb300", lineWidth: 2, lineStyle: LW.LineStyle.Dashed, title: "推定(先を見ない)" }); pr.setData(model.weekly.filter((o) => o.pred !== null).map((o) => ({ time: o.date, value: o.pred })));
     if (pdf) {
       const pp = ln({ color: "#26a69a", lineWidth: 2, lineStyle: LW.LineStyle.Dashed, title: "全銘柄の約定金額から(先を見ない)" }); pp.setData(pdf.weekly.filter((o) => o.pred !== null).map((o) => ({ time: o.date, value: o.pred })));
-      if (pdfNow.length && plast) { const pn = ln({ color: "#26a69a", lineWidth: 3, title: "全銘柄から今週の推定", lastValueVisible: true }); pn.setData([{ time: plast.date, value: plast.y }, ...pdfNow.map((o) => ({ time: o.date, value: o.y }))]); }
+      const dl = dailyEst.filter((r) => r.pl !== null);
+      if (dl.length) { const pn = ln({ color: "#26a69a", lineWidth: 2, title: "毎日の推定(全銘柄から)", lastValueVisible: true }); pn.setData(dl.map((r) => ({ time: r.date, value: r.pl }))); }
     }
     if (now.length && last) {
       const head = { time: last.date, value: last.y };
