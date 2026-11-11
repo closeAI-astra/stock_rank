@@ -1766,6 +1766,8 @@
     }
     // 「相関を探す」で先に読み込んだときは、合計とモデルがまだ描かれていない
     if (S.rank) { drawRankTable(); if (!$("#rankAgg").innerHTML) drawRankAgg(); if (!$("#rankRatio").innerHTML) drawRatioModel(); if (!$("#rankModel").innerHTML) drawMarginModel(); return; }
+    // 信用倍率・評価損益率の予想は全銘柄のデータを待たずに出す(Future Sight の market と自分の inst/market だけで描ける)
+    if (!$("#rankRatio").innerHTML) drawRatioModel();
     table.innerHTML = '<tbody><tr><td class="muted pad">全銘柄の信用残と株価を読み込んでいます…(初回は十数MBの復号があります)</td></tr></tbody>';
     try { S.rankData = await loadRankData(); } catch (e) { table.innerHTML = `<tbody><tr><td class="pad">読み込めませんでした: ${esc(e.message)}</td></tr></tbody>`; return; }
     S.rank = computeRank(S.rankData); drawRankTable(); drawRankAgg(); drawRatioModel(); drawMarginModel();
@@ -1805,11 +1807,14 @@
     const box = $("#rankRatio"); if (!box) return;
     await marketCredit().catch(() => null);
     const cm = S.market?.creditMarket; const off = (S.instMarket?.margin || []).filter((r) => num(r.buy) !== null && num(r.sell));
-    const head = '<div class="row-head"><h3>信用倍率(2市場)の予想</h3><small>JPX が毎週火曜に公表する東証・名証の信用倍率(買残 ÷ 売残、株数)を、毎営業日の全銘柄の信用残(翌営業日 16時ごろ公表)の合計から先に出します</small></div>';
+    const head = '<div class="row-head"><h3>信用倍率・信用評価損益率(2市場)の予想</h3><small>JPX が毎週火曜に公表する東証・名証の信用倍率(買残 ÷ 売残、株数)と、日経の信用評価損益率(買い方)を、毎営業日の全銘柄の信用残(翌営業日 16時ごろ公表)から先に出します。公表の無い日のおおよその値です</small></div>';
     if (!cm?.daily?.length) { box.innerHTML = `<section class="panel">${head}${empty("全銘柄の信用残の合計(stockAI の scripts/build_margin_market.py)がまだ公開されていません。")}</section>`; return; }
     const chk = SRMargin.ratioCheck(off, cm.daily); const nc = SRMargin.ratioNowcast(off, cm.daily, chk);
     const targets = await marginTargets().catch(() => []);
     const graded = SRMargin.gradeNowcasts(cm.nowcast, off, targets).reverse();
+    const dEst = SRMargin.dailyEstimates(cm.daily, targets, off); const dLast = dEst.filter((r) => r.pl !== null).at(-1);
+    const lastPl = targets.filter((o) => Number.isFinite(o.y)).at(-1);
+    const pct2 = (v) => (num(v) === null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`);
     const lastOff = off.at(-1); const lastD = SRMargin.cleanDaily(cm.daily).at(-1);
     const r3 = (v) => (num(v) === null ? "—" : v.toFixed(2));
     const pctE = (v) => (num(v) === null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(3)}%`);
@@ -1819,12 +1824,19 @@
         <article><span>最新の公表値</span><strong>${lastOff ? r3(lastOff.buy / lastOff.sell) : "—"}<small>倍</small></strong><em>${esc(lastOff?.date || "")} 申込分 · 買残 ${lastOff ? (lastOff.buy / 1e8).toFixed(2) : "—"}億株・売残 ${lastOff ? (lastOff.sell / 1e8).toFixed(2) : "—"}億株</em></article>
         ${nc ? `<article><span>${esc(nc.target)} 申込分の推定</span><strong>${r3(nc.ratio)}<small>倍</small></strong><em>${nc.remaining ? `${esc(nc.basis)} の全銘柄の合計から(金曜まで残り ${nc.remaining}営業日・今の値のまま)。95% の幅 ${r3(nc.lo)}〜${r3(nc.hi)}` : `${esc(nc.basis)} 申込分の全銘柄の合計(公表前)。買残 ${(nc.buy / 1e8).toFixed(2)}億株・売残 ${(nc.sell / 1e8).toFixed(2)}億株`}</em></article>` : ""}
         <article><span>全銘柄の合計(最新)</span><strong>${lastD ? r3(lastD.buy_sh / lastD.sell_sh) : "—"}<small>倍</small></strong><em>${esc(lastD?.date || "")} 申込分 · ${fmt(lastD?.n_issues)}銘柄 · 買残 ${lastD ? (lastD.buy_sh / 1e8).toFixed(2) : "—"}億株・金額 ${oku(lastD?.buy_val)}円(約定ベース)</em></article>
+        <article><span>信用評価損益率 最新の公表値</span><strong class="${cls(lastPl?.y)}">${pct2(lastPl?.y)}</strong><em>${esc(lastPl?.date || "")} 申込分 · ${esc(lastPl?.src || "")}</em></article>
+        ${dLast ? `<article><span>信用評価損益率の推定(${esc(dLast.date)})</span><strong class="${cls(dLast.pl)}">${pct2(dLast.pl)}</strong><em>= ${esc(dLast.anchor)} の公表値 ${pct2(dLast.anchorY)} + b ${dLast.b.toFixed(2)} × 全銘柄の約定金額ベースの変化。下の「信用評価損益率」の欄に検証あり</em></article>` : ""}
         <article><span>先を見ない検証(金曜の合計 → 公表値)</span><strong>${chk.mae === null ? "—" : chk.mae.toFixed(3)}<small>倍</small></strong><em>平均の誤差(${chk.weeks.length}週)。前回の公表値のままなら ${chk.maeNaive === null ? "—" : chk.maeNaive.toFixed(2)}倍</em></article>
       </div>
       <div id="rmChart" class="mini-chart"></div>
+      <div class="row-head"><h3>毎日の推定</h3><small>各日の値は、その日より前に出ていた公表値だけを使っています(先を見ない)。網掛けの行は公表値のある金曜申込分</small></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>信用倍率の推定</th><th>公表値</th><th>評価損益率の推定</th><th>公表値</th><th>元にした公表値</th><th>b</th></tr></thead><tbody>
+        ${dEst.slice().reverse().slice(0, 30).map((r) => `<tr class="${r.plOff !== null || r.ratioOff !== null ? "sel" : ""}"><th>${esc(r.date)}</th><td>${r.ratio.toFixed(2)}倍</td><td>${r.ratioOff === null ? "" : `${r.ratioOff.toFixed(2)}倍`}</td><td class="${cls(r.pl)}">${r.pl === null ? "—" : pct2(r.pl)}</td><td>${r.plOff === null ? "" : pct2(r.plOff)}</td><td>${r.anchor ? `${esc(r.anchor)}(${pct2(r.anchorY)})` : "—"}</td><td>${r.b === null ? "—" : r.b.toFixed(2)}</td></tr>`).join("")}
+      </tbody></table></div>
+      <details class="mm-detail"><summary>信用倍率の週ごとの答え合わせ</summary>
       <div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>公表値</th><th>推定(金曜の合計 × 比)</th><th>誤差</th><th>買残の誤差</th><th>売残の誤差</th><th>前回の公表値</th></tr></thead><tbody>
         ${chk.weeks.slice(-12).reverse().map((w) => `<tr><th>${esc(w.date)}</th><td>${r3(w.off)}</td><td>${w.est.toFixed(3)}</td><td>${(w.est - w.off >= 0 ? "+" : "")}${(w.est - w.off).toFixed(3)}</td><td>${pctE(w.buyErr)}</td><td>${pctE(w.sellErr)}</td><td>${r3(w.naive)}</td></tr>`).join("")}
-      </tbody></table></div>
+      </tbody></table></div></details>
       ${graded.length ? `<details class="mm-detail" open><summary>公表前に記録した推定の答え合わせ(事前登録 ${graded.length}件)</summary><div class="table-wrap"><table class="grid"><thead><tr><th>記録した日時</th><th>元にした日</th><th>当てる週(申込日)</th><th>信用倍率の推定</th><th>公表値</th><th>誤差</th><th>評価損益率の推定</th><th>公表値</th><th>誤差</th></tr></thead><tbody>
         ${graded.slice(0, 20).map((g) => `<tr><th>${esc(String(g.madeAt || "").slice(0, 16).replace("T", " "))}</th><td>${esc(g.basisDate)}</td><td>${esc(g.targetDate)}</td><td>${r3(g.ratio)}</td><td>${r3(g.offRatio)}</td><td>${g.ratioErr === null ? "未公表" : `${g.ratioErr >= 0 ? "+" : ""}${g.ratioErr.toFixed(3)}`}</td><td>${num(g.pl) === null ? "—" : `${g.pl.toFixed(2)}%`}</td><td>${num(g.offPl) === null ? "—" : `${g.offPl.toFixed(2)}%`}</td><td>${g.plErr === null ? "未公表" : `${g.plErr >= 0 ? "+" : ""}${g.plErr.toFixed(2)}pt`}</td></tr>`).join("")}
       </tbody></table></div><p class="foot">stockAI が公表の前に推定を記録し(data/shinyo/market_nowcast_log.csv。追記だけで書き換えない)、公表後にここで突き合わせます。</p></details>` : ""}
@@ -1889,7 +1901,7 @@
     const cnt = (k) => targets.filter((o) => o.src.startsWith(k)).length;
     const pdfCard = pcur ? `<article><span>全銘柄の約定金額からの推定(${esc(pcur.date)})</span><strong class="${cls(pcur.y)}">${f2(pcur.y)}</strong><em>= ${esc(plast.date)} の公表値 ${f2(plast.y)} + b ${pdf.b?.toFixed(2)} × 変化 ${pcur.x - plast.x >= 0 ? "+" : ""}${(pcur.x - plast.x).toFixed(2)}pt · 95% の幅 ${pcur.lo.toFixed(1)}〜${pcur.hi.toFixed(1)}% · 検証 ${pdf.nEval}週の誤差 ${pdf.mae?.toFixed(2) ?? "—"}pt</em></article>` : "";
     const jpxErr = cmDaily.filter((r) => r.suspect).map((r) => r.date);
-    const dailyTable = dailyEst.length ? `<div class="row-head"><h3>毎日の推定(信用倍率・評価損益率)</h3><small>公表は週1回(金曜申込分を翌週に)。その間の日のおおよその値を、全銘柄の毎日の信用残から出します。各日の値は、その日より前に出ていた公表値だけを使っています(先を見ない)</small></div>
+    const dailyTable = "" && dailyEst.length ? `<div class="row-head"><h3>毎日の推定(信用倍率・評価損益率)</h3><small>公表は週1回(金曜申込分を翌週に)。その間の日のおおよその値を、全銘柄の毎日の信用残から出します。各日の値は、その日より前に出ていた公表値だけを使っています(先を見ない)</small></div>
       <div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>信用倍率の推定</th><th>公表値</th><th>評価損益率の推定</th><th>公表値</th><th>元にした公表値</th><th>b</th></tr></thead><tbody>
         ${dailyEst.slice().reverse().slice(0, 40).map((r) => `<tr class="${r.plOff !== null || r.ratioOff !== null ? "sel" : ""}"><th>${esc(r.date)}</th><td>${r.ratio.toFixed(2)}倍</td><td>${r.ratioOff === null ? "" : `${r.ratioOff.toFixed(2)}倍`}</td><td class="${cls(r.pl)}">${r.pl === null ? "—" : f2(r.pl)}</td><td>${r.plOff === null ? "" : f2(r.plOff)}</td><td>${r.anchor ? `${esc(r.anchor)}(${f2(r.anchorY)})` : "—"}</td><td>${r.b === null ? "—" : r.b.toFixed(2)}</td></tr>`).join("")}
       </tbody></table></div>
