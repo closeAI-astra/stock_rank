@@ -1,14 +1,7 @@
 {
-  "updatedAt": "2026-11-08T19:55:00+09:00",
+  "updatedAt": "2026-11-15T19:55:00+09:00",
   "note": "Claude が毎週調べた予定(公式発表で確認すること)",
   "events": [
-    {"date": "2026-11-03", "kind": "claude", "title": "文化の日(東証休場)", "note": "日本市場は休場。米国市場は通常取引", "source": "https://www8.cao.go.jp/chosei/shukujitsu/gaiyou.html"},
-    {"date": "2026-11-03", "kind": "earnings", "title": "アップル 7-9月期決算", "note": "日本時間 3日 7:00 から説明会(米国時間2日引け後)。電子部品株に影響", "source": "https://investor.apple.com/investor-relations/event-details/2026/FY-26-Fourth-Quarter-Results/default.aspx"},
-    {"date": "2026-11-04", "kind": "claude", "title": "米中間選挙の開票", "note": "投票は米国時間3日。日本時間4日日中に大勢判明の見込みで、ドル円・米株の変動要因", "source": "https://www.usa.gov/midterm-elections"},
-    {"date": "2026-11-04", "kind": "earnings", "title": "三菱商事 2Q決算", "note": "14:00 公表、14:45 から説明会。商社株・資源価格の動向", "source": "https://www.mitsubishicorp.com/jp/ja/info/2026/info_20261007001.html"},
-    {"date": "2026-11-05", "kind": "earnings", "title": "トヨタ自動車 2Q決算", "note": "時価総額首位。為替前提・関税影響と通期見通しに注目", "source": "https://global.toyota/jp/ir/#calendar"},
-    {"date": "2026-11-05", "kind": "earnings", "title": "任天堂 2Q決算", "note": "Switch 2 の販売動向と通期予想", "source": "https://www.nintendo.co.jp/ir/schedule/index.html"},
-    {"date": "2026-11-05", "kind": "earnings", "title": "ソニーグループ 2Q決算", "note": "発表済み(大引け後公表)。営業利益45%増、通期見通しを上方修正", "source": "https://www.phileweb.com/news/d-av/202611/05/66317.html"},
     {"date": "2026-11-10", "kind": "earnings", "title": "ソフトバンクグループ 2Q決算", "note": "15:30 開示、16:30 説明会。日経平均への寄与度が大きい", "source": "https://group.softbank/en/news/info/20261002"},
     {"date": "2026-11-10", "kind": "macro", "title": "米10月CPI", "note": "日本時間 22:30。インフレ再加速なら米金利上昇・グロース株安の要因", "source": "https://www.bls.gov/schedule/news_release/cpi.htm"},
     {"date": "2026-11-12", "kind": "index", "title": "MSCI 11月定期見直し 発表", "note": "米国時間11日引け後の発表(日本時間12日早朝)。採用・除外銘柄に需給インパクト", "source": "https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf"},
@@ -23,9 +16,14 @@
     {"date": "2026-11-26", "kind": "claude", "title": "米国 感謝祭(米市場休場)", "note": "NYSE・Nasdaq 休場。東証は通常取引だが海外勢不在で薄商い", "source": "https://www.nyse.com/trade/hours-calendars"},
     {"date": "2026-11-27", "kind": "claude", "title": "米市場 短縮取引(ブラックフライデー)", "note": "米国時間13:00(日本時間28日 3:00)で終了。年末商戦の初動に注目", "source": "https://www.nyse.com/trade/hours-calendars"},
     {"date": "2026-11-27", "kind": "macro", "title": "東京都区部CPI(11月中旬速報)", "note": "8:30(26日を含む週の金曜公表の原則)", "source": "https://www.stat.go.jp/data/cpi/index.html"},
-    {"date": "2026-11-30", "kind": "index", "title": "MSCI 11月定期見直し 実施", "note": "30日の大引けで入れ替え(12/1から適用)。対象銘柄は引けに大量の売買", "source": "https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf"},
+    {"date": "2026-11-30", "kind": "index", "title": "MSCI 11月定期見直し 実施", "note": "30日の大引けで入れ替え(12/1から適用)。日本の標準指数は採用0・除外5(ANA HD、大東建託、阪急阪神HD、日本ビルファンドなど)。対象銘柄は引けに大量の売買", "source": "https://www.msci.com/eqb/gimi/stdindex/MSCI_Nov26_STPublicList.pdf"},
     {"date": "2026-12-01", "kind": "macro", "title": "法人企業統計(7-9月期)", "note": "8:50 公表。設備投資の動向は12/8のGDP2次速報の改定材料", "source": "https://www.mof.go.jp/pri/reference/ssc/results/release_info.htm"},
     {"date": "2026-12-08", "kind": "macro", "title": "日本 7-9月期GDP 2次速報", "note": "8:50 公表", "source": "https://www.esri.cao.go.jp/jp/sna/kouhyou/kouhyou_top.html"},
-    {"date": "2026-12-10", "kind": "macro", "title": "米11月CPI", "note": "日本時間 22:30。12/9のFOMC直後で、利下げ・利上げ観測を左右", "source": "https://www.bls.gov/schedule/news_release/cpi.htm"}
+    {"date": "2026-12-10", "kind": "macro", "title": "米11月CPI", "note": "日本時間 22:30。12/9のFOMC直後で、利下げ・利上げ観測を左右", "source": "https://www.bls.gov/schedule/news_release/cpi.htm"},
+    {"date": "2026-12-10", "kind": "earnings", "title": "ブロードコム 8-10月期決算", "note": "米国時間9日引け後、説明会は日本時間 10日 7:00。AI向け半導体の需要を示し、日本の半導体株にも波及", "source": "https://investors.broadcom.com/news-releases/news-release-details/broadcom-inc-announce-fourth-quarter-and-fiscal-year-2026"},
+    {"date": "2026-12-14", "kind": "macro", "title": "日銀短観(12月調査)", "note": "全国版は 8:50 公表の原則。日銀支店の公表予定(12/14)から確認、本店日程も要確認。12/18の日銀会合の判断材料", "source": "https://www3.boj.or.jp/yokohama/shiryou/tankan.html"},
+    {"date": "2026-12-16", "kind": "macro", "title": "米11月小売売上高", "note": "日本時間 22:30。年末商戦の初動", "source": "https://www.census.gov/retail/release_schedule.html"},
+    {"date": "2026-12-17", "kind": "policy", "title": "ECB 理事会 結果", "note": "政策発表は日本時間 22:15、会見 22:45", "source": "https://www.ecb.europa.eu/press/calendars/mgcgc/html/index.en.html"},
+    {"date": "2026-12-18", "kind": "macro", "title": "全国CPI(11月分)", "note": "8:30(19日を含む週の金曜公表の原則)。同日の日銀会合結果の前に発表", "source": "https://www.stat.go.jp/data/cpi/index.html"}
   ]
 }
