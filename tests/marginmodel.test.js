@@ -88,24 +88,32 @@ const d0925 = de.find((r) => r.date === "2026-09-25"); assert.strictEqual(d0925.
 assert.ok(Math.abs(de.find((r) => r.date === "2026-10-30").ratio - 3654854000 / 349230000) < 0.005);
 console.log("marginmodel (毎日) ok");
 
-// ---- 予測(引け時点の情報だけ)と実データの分離(2026-11-19) ----
+// ---- 予測(日証金の値まで)と実データの分離(2026-11-19) ----
 {
   const fr = M.ratioForecasts(fx.daily, fx.official, ["2026-11-10"]);
   const row = (d) => fr.find((r) => r.date === d);
-  // 10/23(金)の引けの時点では、10/22 の合計(10/23 16時公表)はまだ出ていないので、元は 10/21
-  assert.strictEqual(row("2026-10-23").base, "2026-10-21");
-  // 祝日(11/3)をはさむ: 11/4 の予測の元は 10/30(10/30 の分は 11/2 16時、11/2 の分は 11/4 16時 = 引けの後)
-  assert.strictEqual(row("2026-11-04").base, "2026-10-30");
-  // 金曜の実データは公表値とほぼ同じ(先回り集計)。判明は月曜、公表は火曜
+  // 日証金が無いときは「前の営業日の合計のまま」。祝日(11/3)をはさむ 11/4 の元は 11/2
+  assert.strictEqual(row("2026-10-23").base, "2026-10-22"); assert.strictEqual(row("2026-10-23").used, "persist");
+  assert.strictEqual(row("2026-11-04").base, "2026-11-02");
+  // 金曜の実データは公表値とほぼ同じ(先回り集計)。判明は月曜、公表は火曜(祝日をはさむと水曜)
   assert.ok(Math.abs(row("2026-10-30").actual - row("2026-10-30").off) < 0.01);
   assert.strictEqual(row("2026-10-30").actualAt, "2026-11-02");
   assert.strictEqual(row("2026-10-30").offAt, "2026-11-04");
-  // 先を見ない: 予測の日の引けより後に出るデータを壊しても、その日の予測は変わらない
-  const D = "2026-10-29"; const a = row(D);
-  const broken = fx.daily.map((r) => (r.date >= "2026-10-28" ? { ...r, buy_sh: r.buy_sh * 2 } : r));
-  const offB = fx.official.map((o) => (o.date >= "2026-10-23" ? { ...o, buy: o.buy * 3 } : o));
-  assert.strictEqual(M.ratioForecasts(broken, offB, []).find((r) => r.date === D).fc, a.fc);
   // 未来の日は予測だけ(実データなし)
   assert.strictEqual(row("2026-11-10").actual, null); assert.ok(row("2026-11-10").fc > 0);
+
+  // 日証金の変化が全銘柄の合計の変化のちょうど半分なら、β ≒ 2 になり、予測は実データとほぼ同じになる
+  const dd = M.cleanDaily(fx.daily);
+  const jsf = dd.map((r, i) => ({ date: r.date, dLoan: i ? 0.5 * Math.log(r.buy_sh / dd[i - 1].buy_sh) : null, dLend: i ? 0.5 * Math.log(r.sell_sh / dd[i - 1].sell_sh) : null }));
+  const fj = M.ratioForecasts(fx.daily, fx.official, [], undefined, jsf);
+  const late = fj.filter((r) => r.used === "jsf");
+  assert.ok(late.length >= 10, `日証金を使った日 ${late.length}`);
+  late.forEach((r) => { assert.ok(Math.abs(r.beta.b - 2) < 1e-6 && Math.abs(r.beta.s - 2) < 1e-6); assert.ok(Math.abs(r.fc / r.actual - 1) < 0.002, `${r.date} ${r.fc} ${r.actual}`); });
+  // 先を見ない: D の予測は、D 以降の全銘柄の合計・D より後の日証金・まだ出ていない公表値を壊しても変わらない
+  const D = late.at(-3).date; const a = fj.find((r) => r.date === D);
+  const broken = fx.daily.map((r) => (r.date >= D ? { ...r, buy_sh: r.buy_sh * 2 } : r));
+  const jsfB = jsf.map((r) => (r.date > D ? { ...r, dLoan: 9 } : r));
+  const offB = fx.official.map((o) => (M.friday(o.date) >= M.friday(D) ? { ...o, buy: o.buy * 3 } : o));
+  assert.strictEqual(M.ratioForecasts(broken, offB, [], undefined, jsfB).find((r) => r.date === D).fc, a.fc);
   console.log("ratioForecasts ok");
 }

@@ -90,6 +90,13 @@ class Store:
         self.dirty[name] = val
         return val
 
+    def peek(self, name: str, default):
+        """読むだけ(保存の対象にしない)。全銘柄を集計するときに、触っていないファイルまで書き直さないように"""
+        if name in self.dirty:
+            return self.dirty[name]
+        p = self.root / f"{name}.json.enc"
+        return decrypt_json(p.read_bytes(), self.key) if p.exists() else default
+
     def save_all(self) -> int:
         for name, val in self.dirty.items():
             p = self.root / f"{name}.json.enc"
@@ -821,7 +828,50 @@ def run_jsf(f: Fetcher, store: Store, index: dict, universe: dict) -> dict:
         doc["jsfRestrict"] = restrict.get(code, [])
         n += 1
     index["jsfLastDate"] = max(r["date"] for r in got["zandaka"]) if got["zandaka"] else index.get("jsfLastDate")
+    # 東証の全銘柄(貸借銘柄)の合計も日ごとに積み上げる(その日の CSV にしか無いので、取った日から先の分だけ)
+    market = store.load("market", {})
+    tot: dict[str, dict] = {}
+    for r in got["zandaka"]:
+        if r.get("loan") is None or r.get("lend") is None:
+            continue
+        a = tot.setdefault(r["date"], {"date": r["date"], "loan": 0.0, "lend": 0.0, "n": 0, "prelim": 0})
+        a["loan"] += r["loan"]; a["lend"] += r["lend"]; a["n"] += 1
+        a["prelim"] += 1 if r.get("kind") == "速報" else 0
+    market["jsfAll"] = merge_rows(market.get("jsfAll", []), list(tot.values()), lambda x: x["date"])[-1500:]
     return {"status": "ok", "rows": n, "date": index.get("jsfLastDate")}
+
+
+def build_jsf_totals(store: Store, universe: dict) -> dict:
+    """日証金の融資残(≒制度信用の買い)・貸株残(≒制度信用の売り)の、対象銘柄の合計を日ごとに作る(銘柄ごとの履歴からさかのぼって)。
+    銘柄の入れ替わりで合計が跳ばないよう、前の日付との変化(対数)は両方の日にある銘柄だけで計算する(dLoan / dLend)。
+    stock_rank の信用倍率の予測(assets/js/marginmodel.js の ratioForecasts)が、全銘柄の合計(翌営業日 16時公表)より先に出る
+    日証金の値(申込日の翌営業日の昼までに出る)で、その日の信用倍率を推定するのに使う。"""
+    per: dict[str, dict[str, tuple[float, float, str | None]]] = {}
+    for code in universe:
+        doc = store.peek(f"stocks/{code}", None)
+        for r in (doc or {}).get("lending", []):
+            if r.get("loan") is None or r.get("lend") is None or not r.get("date"):
+                continue
+            per.setdefault(r["date"], {})[code] = (float(r["loan"]), float(r["lend"]), r.get("kind"))
+    import math
+    rows, prev = [], None
+    for d in sorted(per):
+        cur = per[d]
+        row = {"date": d, "loan": sum(v[0] for v in cur.values()), "lend": sum(v[1] for v in cur.values()), "n": len(cur),
+               "prelim": sum(1 for v in cur.values() if v[2] == "速報"), "dLoan": None, "dLend": None, "nCommon": 0}
+        if prev is not None:
+            common = [c for c in cur if c in per[prev]]
+            l0, l1 = sum(per[prev][c][0] for c in common), sum(cur[c][0] for c in common)
+            s0, s1 = sum(per[prev][c][1] for c in common), sum(cur[c][1] for c in common)
+            row["nCommon"] = len(common)
+            if l0 > 0 and l1 > 0 and s0 > 0 and s1 > 0 and len(common) >= 0.8 * max(len(cur), len(per[prev])):
+                row["dLoan"], row["dLend"] = round(math.log(l1 / l0), 6), round(math.log(s1 / s0), 6)
+        rows.append(row)
+        prev = d
+    market = store.load("market", {})
+    market["jsfTotals"] = rows
+    market["jsfTotalsNote"] = "日証金の貸借取引残高(融資残・貸株残、株数)の対象銘柄の合計。dLoan/dLend は前の日付からの対数の変化(両方の日にある銘柄だけ)"
+    return {"status": "ok", "days": len(rows), "last": rows[-1]["date"] if rows else None}
 
 
 # =====================================================================
@@ -876,6 +926,7 @@ def main() -> int:
     if not only or "jsf" in only:
         print("\n== 日証金")
         res["jsf"] = run_jsf(Fetcher(opts.delay, JSF), store, index, universe)
+        res["jsfTotals"] = build_jsf_totals(store, universe)
     if not only or "edinet" in only:
         print("\n== EDINET")
         res["edinet"] = run_edinet(store, index, universe, opts)

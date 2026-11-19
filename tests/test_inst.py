@@ -83,6 +83,28 @@ class InstTest(unittest.TestCase):
         self.assertEqual([r["v"] for r in out], [0, 2])
 
 
+class JsfTotalsTest(unittest.TestCase):
+    def test_totals_and_common_changes(self):
+        import math
+        import tempfile
+        key = bytes(32)
+        with tempfile.TemporaryDirectory() as tmp:
+            st = I.Store(Path(tmp), key)
+            # 1111 は3日とも、2222 は2日目から(入れ替わり)。変化は両方の日にある銘柄だけで計算する
+            st.dirty["stocks/1111"] = {"lending": [{"date": "2026-11-16", "loan": 100.0, "lend": 10.0}, {"date": "2026-11-17", "loan": 110.0, "lend": 10.0}, {"date": "2026-11-18", "loan": 121.0, "lend": 20.0}]}
+            st.dirty["stocks/2222"] = {"lending": [{"date": "2026-11-17", "loan": 1000.0, "lend": 100.0}, {"date": "2026-11-18", "loan": 1000.0, "lend": 100.0, "kind": "速報"}]}
+            st.save_all()
+            res = I.build_jsf_totals(st, {"1111": {}, "2222": {}})
+            rows = st.dirty["market"]["jsfTotals"]
+            self.assertEqual(res["days"], 3)
+            self.assertIsNone(rows[0]["dLoan"])
+            self.assertIsNone(rows[1]["dLoan"])  # 共通の銘柄が半分しかない日は変化を出さない
+            self.assertAlmostEqual(rows[2]["dLoan"], math.log(1121 / 1110), places=5)
+            self.assertAlmostEqual(rows[2]["dLend"], math.log(120 / 110), places=5)
+            self.assertEqual(rows[2]["prelim"], 1)
+            self.assertEqual(sorted(st.dirty), ["market"])  # 銘柄のファイルは書き直さない
+
+
 if __name__ == "__main__":
     unittest.main()
 

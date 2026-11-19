@@ -173,8 +173,12 @@ w("market", {"generatedAt": "2026-10-25T22:00:00+09:00",
                               "daily": [{**r, "buy_val": r["buy_sh"] * 1780.0, "n_issues": 4217, "n_priced": 586, "cov_buy_share": 0.7} for r in FX["daily"]],
                               "nowcast": [{"madeAt": "2026-10-27T17:30:00+09:00", "basisDate": "2026-10-26", "targetDate": "2026-10-30", "ratio": 9.69, "pl": -13.9, "method": "テスト"},
                                           {"madeAt": "2026-11-11T02:00:15+09:00", "basisDate": "2026-11-09", "targetDate": "2026-11-13", "ratio": 9.9546, "pl": -19.68, "method": "テスト"}]}})
+# 日証金の合計(テスト用): 全銘柄の合計の変化の半分 + 雑音。10/13 から(実際の取得開始に近い)
+_dd = [r for r in FX["daily"] if not r.get("suspect")]
+JSF = [{"date": r["date"], "loan": 0, "lend": 0, "n": 400, "dLoan": (0.5 * math.log(r["buy_sh"] / _dd[i - 1]["buy_sh"]) + random.gauss(0, 0.002)) if i and r["date"] > "2026-10-13" else None,
+        "dLend": (0.5 * math.log(r["sell_sh"] / _dd[i - 1]["sell_sh"]) + random.gauss(0, 0.004)) if i and r["date"] > "2026-10-13" else None} for i, r in enumerate(_dd) if r["date"] >= "2026-10-13"]
 # 自分のデータ(stock_rank の data/inst/market)。3つ目の引数にフォルダを渡したときだけ作る
 if len(sys.argv) > 3:
     own = Path(sys.argv[3]); (own / "data" / "inst").mkdir(parents=True, exist_ok=True)
-    (own / "data" / "inst" / "market.json.enc").write_bytes(encrypt_json({"updatedAt": "2026-11-10T19:13:00+09:00", "margin": [{**o, "ratio": o["buy"] / o["sell"]} for o in FX["official"]], "marginSource": "JPX 信用取引現在高(テスト)"}, key))
+    (own / "data" / "inst" / "market.json.enc").write_bytes(encrypt_json({"updatedAt": "2026-11-10T19:13:00+09:00", "margin": [{**o, "ratio": o["buy"] / o["sell"]} for o in FX["official"]], "marginSource": "JPX 信用取引現在高(テスト)", "jsfTotals": JSF}, key))
 print(f"mock data: {len(STOCKS)} stocks → {out}")
