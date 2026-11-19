@@ -15,7 +15,9 @@
 (function (root) {
   "use strict";
   const DAY = 864e5;
-  const t = (d) => Date.parse(`${d}T00:00:00Z`);
+  // 日付の文字列 → ミリ秒。同じ日付を何十万回も変換するので覚えておく
+  const T_CACHE = new Map();
+  const t = (d) => { let v = T_CACHE.get(d); if (v === undefined) { v = Date.parse(`${d}T00:00:00Z`); if (T_CACHE.size > 50000) T_CACHE.clear(); T_CACHE.set(d, v); } return v; };
   const fin = (x) => typeof x === "number" && Number.isFinite(x);
   const lastIdx = (rows, key, v) => { let lo = 0, hi = rows.length - 1, a = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (rows[m][key] <= v) { a = m; lo = m + 1; } else hi = m - 1; } return a; };
 

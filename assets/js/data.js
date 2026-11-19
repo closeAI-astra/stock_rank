@@ -57,8 +57,37 @@
     try { return new TextDecoder().decode(await decryptBytes(b64(state.meta.check), key)) === "future-sight-ok"; } catch { return false; }
   }
 
-  // 保存済みの鍵: Stock Rank 自身のもの → Future Sight の gate.js が保存したもの(同一オリジンのとき)
+  // 「この端末で覚える」の鍵は IndexedDB に「取り出せない鍵(non-extractable の CryptoKey)」として置く。
+  // localStorage に生の鍵を置くと、万一ページに不正なスクリプトが入ったとき鍵そのものを持ち出されるため(2026-11-19 変更)
+  const IDB_NAME = "stockrank", IDB_STORE = "keys", IDB_KEY = "data-key";
+  function idbOpen() {
+    return new Promise((resolve, reject) => {
+      const r = indexedDB.open(IDB_NAME, 1);
+      r.onupgradeneeded = () => r.result.createObjectStore(IDB_STORE);
+      r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error);
+    });
+  }
+  async function idbDo(mode, fn) {
+    const db = await idbOpen();
+    try {
+      return await new Promise((resolve, reject) => { const tx = db.transaction(IDB_STORE, mode); const req = fn(tx.objectStore(IDB_STORE)); tx.oncomplete = () => resolve(req?.result); tx.onerror = () => reject(tx.error); tx.onabort = () => reject(tx.error); });
+    } finally { db.close(); }
+  }
+  const idbGet = () => idbDo("readonly", (st) => st.get(IDB_KEY));
+  const idbPut = (v) => idbDo("readwrite", (st) => st.put(v, IDB_KEY));
+  const idbDel = () => idbDo("readwrite", (st) => st.delete(IDB_KEY));
+  async function rememberKey(rawB64) {
+    const key = await crypto.subtle.importKey("raw", b64(rawB64), { name: "AES-GCM" }, false, ["decrypt"]);
+    await idbPut({ salt: state.meta.salt, key });
+  }
+
+  // 保存済みの鍵: IndexedDB(覚えた鍵)→ このタブだけの鍵(sessionStorage)→ 古い形式(localStorage の生の鍵。見つけたら IndexedDB へ移して消す)
+  //   → Future Sight の gate.js が保存したもの(同一オリジンのとき)
   async function tryStoredKeys() {
+    try {
+      const saved = await idbGet();
+      if (saved && saved.salt === state.meta.salt && saved.key && (await checkKey(saved.key))) { state.key = saved.key; return true; }
+    } catch { /* IndexedDB が使えない環境(プライベートモードなど)では次へ */ }
     for (const storeName of ["sessionStorage", "localStorage"]) {
       let store; try { store = root[storeName]; if (!store) continue; } catch { continue; }
       const names = [];
@@ -69,7 +98,11 @@
           const saved = JSON.parse(store.getItem(k) || "null");
           if (!saved || saved.salt !== state.meta.salt) continue;
           const key = await crypto.subtle.importKey("raw", b64(saved.raw), { name: "AES-GCM" }, false, ["decrypt"]);
-          if (await checkKey(key)) { state.key = key; return true; }
+          if (await checkKey(key)) {
+            state.key = key;
+            if (storeName === "localStorage" && k === OWN_STORE) { try { await rememberKey(saved.raw); store.removeItem(OWN_STORE); } catch { /* 移せなければ古い形式のまま */ } }
+            return true;
+          }
         } catch { /* 壊れた保存値は無視 */ }
       }
     }
@@ -87,11 +120,12 @@
     state.key = key;
     try {
       const raw = toB64(await crypto.subtle.exportKey("raw", key));
-      (remember ? localStorage : sessionStorage).setItem(OWN_STORE, JSON.stringify({ salt: state.meta.salt, raw }));
+      if (remember) { await rememberKey(raw); try { localStorage.removeItem(OWN_STORE); } catch { /* */ } }
+      else sessionStorage.setItem(OWN_STORE, JSON.stringify({ salt: state.meta.salt, raw })); // このタブを閉じるまで(再読み込みで入れ直さなくてよいように)
     } catch { /* 保存できない環境では毎回入力 */ }
     return true;
   }
-  function forget() { try { localStorage.removeItem(OWN_STORE); sessionStorage.removeItem(OWN_STORE); } catch { /* */ } }
+  function forget() { try { localStorage.removeItem(OWN_STORE); sessionStorage.removeItem(OWN_STORE); } catch { /* */ } return idbDel().catch(() => {}); }
 
   async function getEnc(url) {
     const r = await fetchWithTimeout(url);

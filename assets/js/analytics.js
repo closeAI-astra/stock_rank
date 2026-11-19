@@ -125,12 +125,18 @@
   // 係数を足し合わせる(非同期取引の補正。Dimson のベータと同じ考え方)。TOPIX は同じ時間帯なので当日だけ。
   //   株価の日次リターン = a + β_TOPIX × TOPIX + β_fx0 × ドル円(当日) + β_fx1 × ドル円(前日) + γ0 × Δ金利(当日) + γ1 × Δ金利(前日)
   function seriesMap(rows) { const m = new Map(); (rows || []).forEach((r) => { if (num(r.c) !== null) m.set(r.d, r.c); }); return m; }
+  // 各因子は「その日以前で最後の値」を使う(休日のずれ)
+  const lastOn = (m) => { const keys = [...m.keys()].sort(); return (d) => { let lo = 0, hi = keys.length - 1, ans = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (keys[mid] <= d) { ans = mid; lo = mid + 1; } else hi = mid - 1; } return ans < 0 ? null : { i: ans, v: m.get(keys[ans]), keys }; }; };
+  const FACTOR_PREP = new WeakMap();
+  function factorPrep(rows) {
+    if (!rows || typeof rows !== "object") { const m = seriesMap(rows); return { m, f: lastOn(m) }; }
+    let c = FACTOR_PREP.get(rows); if (!c) { const m = seriesMap(rows); c = { m, f: lastOn(m) }; FACTOR_PREP.set(rows, c); }
+    return c;
+  }
   function sensitivity(stock, factors, window = 250, opts = {}) {
     const s = (stock || []).filter((r) => num(r.c) !== null);
-    const tpx = seriesMap(factors.tpx), fx = seriesMap(factors.fx), tnx = seriesMap(factors.tnx);
-    // 各因子は「その日以前で最後の値」を使う(休日のずれ)
-    const lastOn = (m) => { const keys = [...m.keys()].sort(); return (d) => { let lo = 0, hi = keys.length - 1, ans = -1; while (lo <= hi) { const mid = (lo + hi) >> 1; if (keys[mid] <= d) { ans = mid; lo = mid + 1; } else hi = mid - 1; } return ans < 0 ? null : { i: ans, v: m.get(keys[ans]), keys }; }; };
-    const fTpx = lastOn(tpx), fFx = lastOn(fx), fTnx = lastOn(tnx);
+    // 因子の表と検索は全銘柄で同じなので、同じ配列なら作り直さない(ランキングで 400 回呼ばれる)
+    const [{ m: tpx, f: fTpx }, { m: fx, f: fFx }, { m: tnx, f: fTnx }] = [factors.tpx, factors.fx, factors.tnx].map(factorPrep);
     const rows = [];
     for (let i = 2; i < s.length; i++) {
       const d = s[i].d, dp = s[i - 1].d;

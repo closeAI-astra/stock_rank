@@ -55,13 +55,21 @@ jobs:
         if: ${{ inputs.mode == 'probe' }}
         env:
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
-        run: python scripts/inst_probe.py --sample --only "${{ inputs.only }}" --urls "${{ inputs.urls }}"
+          IN_ONLY: ${{ inputs.only }}
+          IN_URLS: ${{ inputs.urls }}
+        # 入力は環境変数で渡す(${{ }} を run に直接書くと、入力の文字がシェルのコマンドとして解釈されうるため)
+        run: python scripts/inst_probe.py --sample --only "$IN_ONLY" --urls "$IN_URLS"
       - name: Fetch and save
         if: ${{ (inputs.mode || 'update') == 'update' }}
         env:
           FS_PAGES_PASSWORD: ${{ secrets.FS_PAGES_PASSWORD }}
           EDINET_API_KEY: ${{ secrets.EDINET_API_KEY }}
-        run: python scripts/inst_data.py --only "${{ inputs.only }}" --edinet-days "${{ inputs.edinet_days || '365' }}" --edinet-from "${{ inputs.edinet_from }}" --max-minutes 90
+          IN_ONLY: ${{ inputs.only }}
+          IN_EDINET_DAYS: ${{ inputs.edinet_days || '365' }}
+          IN_EDINET_FROM: ${{ inputs.edinet_from }}
+        run: |
+          case "$IN_EDINET_DAYS" in ''|*[!0-9]*) echo "edinet_days は数字で指定してください"; exit 1;; esac
+          python scripts/inst_data.py --only "$IN_ONLY" --edinet-days "$IN_EDINET_DAYS" --edinet-from "$IN_EDINET_FROM" --max-minutes 90
       - name: Commit
         if: ${{ !cancelled() && (inputs.mode || 'update') == 'update' }}
         run: |

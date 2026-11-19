@@ -5,6 +5,8 @@
   const $ = (s, el = document) => el.querySelector(s);
   const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // 外部リンクは http(s) だけ通す(取得したデータの URL に javascript: などが混ざっても実行されないように)
+  const safeUrl = (u) => { try { const x = new URL(String(u || ""), location.href); return x.protocol === "https:" || x.protocol === "http:" ? esc(x.href) : "#"; } catch { return "#"; } };
   const num = (v) => { if (v === null || v === undefined || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; };
   const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const LS = {
@@ -250,7 +252,7 @@
     $$("[data-set]", body).forEach((el) => el.addEventListener("change", () => {
       const k = el.dataset.set; S.set[k] = k === "scale" ? Number(el.value) : el.value; saveSettings(); afterSettings();
       if (k === "creditMethod" && S.cur && !S.cur.isIndex) computeEst(S.cur);
-      if (k === "creditMethod" && S.rank) { const m = $("#rankMethod"); if (m) m.value = el.value; S.rank = computeRank(S.rankData); S.mmStocks = null; S.exStocks = null; }
+      if (k === "creditMethod" && S.rank) { const m = $("#rankMethod"); if (m) m.value = el.value; refreshRank().then((ok) => { if (ok) { S.mmStocks = null; S.exStocks = null; } }); }
       toast("保存しました");
     }));
     $$("[data-set-ind]", body).forEach((el) => el.addEventListener("change", () => { const k = el.dataset.setInd; S.set.ind = el.checked ? [...new Set([...S.set.ind, k])] : S.set.ind.filter((x) => x !== k); saveSettings(); afterSettings(); }));
@@ -261,7 +263,7 @@
       if (what === "drawings") { try { Object.keys(localStorage).filter((k) => k.startsWith("stockrank-draw")).forEach((k) => localStorage.removeItem(k)); } catch { /* */ } S.drawings = []; if (drawLayer) { drawLayer.items = S.drawings; drawLayer.update(); } }
       if (what === "trades") { if (!confirm(`この端末に保存した売買の記録 ${S.trades.length}件をすべて消します。先に CSV で保存しましたか?`)) return; S.trades = []; saveTrades(); }
       if (what === "settings") { S.set = { ...DEFAULTS }; saveSettings(); afterSettings(); }
-      if (what === "key") { if (!confirm("この端末に保存したパスワード(復号の鍵)を消して、ページを閉じた状態に戻します。よろしいですか?")) return; SRData.forget(); location.reload(); return; }
+      if (what === "key") { if (!confirm("この端末に保存したパスワード(復号の鍵)を消して、ページを閉じた状態に戻します。よろしいですか?")) return; SRData.forget().finally(() => location.reload()); return; }
       toast("消しました"); renderSettings();
     }));
   }
@@ -399,6 +401,9 @@
   // チャート(Lightweight Charts)
   // =====================================================================
   let chart = null; let mainSeries = null; let overlay = []; let paneSeries = [];
+  // ページの中に置くチャートは、ホイールでページをスクロールできるようにする(ホイールで縮小されて線が右端に潰れるのを防ぐ)。
+  // 拡大縮小はドラッグ・軸のドラッグ・ピンチで行う
+  const PAGE_CHART = { handleScroll: { mouseWheel: false, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false }, handleScale: { mouseWheel: false, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true } };
   function chartTheme() {
     return {
       layout: { background: { type: "solid", color: css("--tv-bg") }, textColor: css("--tv-text"), fontFamily: "-apple-system, 'Segoe UI', 'Hiragino Sans', 'Noto Sans JP', sans-serif", fontSize: 11, panes: { separatorColor: css("--tv-border"), separatorHoverColor: css("--tv-hover"), enableResize: true } },
@@ -977,7 +982,7 @@
       <div><dt>直近の通期</dt><dd>${lastA ? `${esc(lastA.period)} 営業益 ${mil(lastA.op)}` : "—"}</dd></div><div><dt>今期 会社予想 営業益</dt><dd>${forecast ? `${mil(forecast.op)}<small class="${cls(yoyOf(forecast.op, lastA?.op))}"> ${pct(yoyOf(forecast.op, lastA?.op))}</small>` : "—"}</dd></div>
       <div><dt>直近の決算発表</dt><dd>${lastEv ? esc(lastEv.date) : "—"}</dd></div><div><dt>&nbsp;</dt><dd><small>${lastEv ? esc(lastEv.period || "") : ""}</small></dd></div></dl>
       <p class="foot">金額は百万円。予想は会社予想(株探)。</p>
-      <div class="sc-links"><a href="https://kabutan.jp/stock/?code=${esc(cur.code)}" target="_blank" rel="noopener">株探</a><a href="https://irbank.net/${esc(cur.code)}" target="_blank" rel="noopener">IRBANK</a><a href="https://www.tradingview.com/chart/?symbol=TSE%3A${esc(cur.code)}" target="_blank" rel="noopener">TradingView</a></div>`;
+      <div class="sc-links"><a href="https://kabutan.jp/stock/?code=${esc(cur.code)}" target="_blank" rel="noopener noreferrer">株探</a><a href="https://irbank.net/${esc(cur.code)}" target="_blank" rel="noopener noreferrer">IRBANK</a><a href="https://www.tradingview.com/chart/?symbol=TSE%3A${esc(cur.code)}" target="_blank" rel="noopener noreferrer">TradingView</a></div>`;
     $("[data-fav-card]", box).addEventListener("click", () => { const c = cur.code; if (S.favs.has(c)) S.favs.delete(c); else S.favs.add(c); LS.set("stockrank-favs", [...S.favs]); renderSymCard(); renderWatch(); });
   }
 
@@ -1038,7 +1043,7 @@
   async function loadUniverse() {
     if (S.rankData) return S.rankData;
     toast("全銘柄の株価・信用残を読み込んでいます…");
-    S.rankData = await loadRankData(); S.rank = computeRank(S.rankData);
+    S.rankData = await loadRankData(); await refreshRank();
     renderBottom(); return S.rankData;
   }
   const empty = (msg) => `<div class="empty">${esc(msg)}</div>`;
@@ -1068,7 +1073,10 @@
     const agg = cur.creditAgg || [];
     const last = agg.at(-1);
     const cards = last ? `<div class="cards"><article><span>買残(対象銘柄合計)</span><strong>${fmt(last.buy)}<small>株</small></strong><em>${esc(last.date)} · 4週 ${pct(SRCredit.changeOver(agg, "buy", 4))}</em></article><article><span>売残(対象銘柄合計)</span><strong>${fmt(last.sell)}<small>株</small></strong><em>4週 ${pct(SRCredit.changeOver(agg, "sell", 4))}</em></article><article><span>信用倍率(対象銘柄合計)</span><strong>${fmt(last.ratio, 2)}<small>倍</small></strong><em>${esc(String(last.n || ""))}銘柄</em></article></div>` : "";
-    return `${cards}${jpxMarginSection()}${whole.length && !S.instMarket?.margin?.length ? creditTable(whole, "東証全体の信用残(株探・IRBANK 保存)", "取得元のページの表から取り出した値。単位は取得元のまま") : `<div class="empty">東証全体の信用残はまだ保存されていません。<br><small>「Kabutan weekly」「IRBANK archive」が、トップページの「信用残」などのリンクから市場全体のページを探して保存します。</small></div>`}
+    // 東証全体は JPX の信用取引現在高(毎日の取得)を使う。無いときだけ 2026-10 までの株探・IRBANK の保存分を出す
+    const jpx = jpxMarginSection();
+    const saved = jpx ? "" : whole.length ? creditTable(whole, "東証全体の信用残(株探・IRBANK 保存・2026-10 まで)", "取得元のページの表から取り出した値。単位は取得元のまま") : `<div class="empty">東証全体の信用残(JPX の信用取引現在高)を読み込めませんでした。<br><small>GitHub Actions の「Institutional data」が平日に取得しています。Actions の実行結果を確認してください。</small></div>`;
+    return `${cards}${jpx}${saved}
       ${creditTable(agg, "stockAI 対象銘柄(約400)の信用残の合計", `〜2026-09 は週次、2026-09-25 申込分からは JPX の日次。東証全体ではない。${Object.entries(CREDIT_ERRATA).map(([d, t]) => `${d} は ${t}`).join(" / ")}`)}
       <p class="foot">チャートの「信用残」「信用倍率」サブチャートは、${esc(cur.creditLabel || "")}の値です。指数の値 × 株数 は金額にならないため、指数では金額・評価損益率は出しません(対象銘柄合計の推定評価損益率は「ランキング・信用」ページ)。</p>`;
   }
@@ -1116,7 +1124,11 @@
     const jpx = jpxFlowsSection();
     if (!weeks.length) return jpx || empty("投資部門別売買のデータはありません。");
     const keys = Object.keys(FLOW_LABELS).filter((k) => weeks.some((w) => w[k] !== undefined));
-    return `<div class="row-head"><h3>投資部門別 株式売買状況(差引き = 買い − 売り)</h3><small>${esc(f.unit || "")} · ${esc(f.source || "")}</small></div><div class="table-wrap"><table class="grid"><thead><tr><th>週</th>${keys.map((k) => `<th>${FLOW_LABELS[k]}</th>`).join("")}<th>売買代金</th><th>公表</th></tr></thead><tbody>${weeks.slice().reverse().map((w) => `<tr><th>${esc(w.weekEnd)}</th>${keys.map((k) => `<td class="${cls(w[k])}">${num(w[k]) === null ? "—" : `${w[k] >= 0 ? "+" : ""}${fmt(w[k], 0)}`}</td>`).join("")}<td>${fmt(w.totalValue)}</td><td><small>${esc(w.availableFrom || "")}</small></td></tr>`).join("")}</tbody></table></div>${jpx}`;
+    const lastFs = weeks.at(-1)?.weekEnd || "";
+    const table = `<div class="table-wrap"><table class="grid"><thead><tr><th>週</th>${keys.map((k) => `<th>${FLOW_LABELS[k]}</th>`).join("")}<th>売買代金</th><th>公表</th></tr></thead><tbody>${weeks.slice().reverse().map((w) => `<tr><th>${esc(w.weekEnd)}</th>${keys.map((k) => `<td class="${cls(w[k])}">${num(w[k]) === null ? "—" : `${w[k] >= 0 ? "+" : ""}${fmt(w[k], 0)}`}</td>`).join("")}<td>${fmt(w.totalValue)}</td><td><small>${esc(w.availableFrom || "")}</small></td></tr>`).join("")}</tbody></table></div>`;
+    // JPX の表(stock_rank が毎日取得)があればそちらが本体。stockAI 側の表は取得を stock_rank に移したので更新が止まっている
+    if (jpx) return `${jpx}<details class="panel-details"><summary>stockAI 側の表(${esc(lastFs)} で更新停止・参考)</summary><p class="foot">${esc(f.unit || "")} · ${esc(f.source || "")}。投資部門別の取得は stock_rank(JPX から毎週)に一本化しました。</p>${table}</details>`;
+    return `<div class="row-head"><h3>投資部門別 株式売買状況(差引き = 買い − 売り)</h3><small>${esc(f.unit || "")} · ${esc(f.source || "")}</small></div>${table}`;
   }
   function tabBreadth() {
     const b = S.market?.breadth; const secs = (S.market?.sectors || []).slice().sort((x, y) => (num(y.chg20d) ?? -9) - (num(x.chg20d) ?? -9));
@@ -1417,9 +1429,9 @@
         <div class="table-wrap tall"><table class="grid"><thead><tr><th>日付</th><th>融資残(株)</th><th>貸株残(株)</th><th>差引</th><th>貸借倍率</th><th>品貸料(円)</th><th>日数</th></tr></thead><tbody>${lend.slice().reverse().slice(0, 300).map((r) => `<tr><th>${esc(r.date)}</th><td>${fmt(r.loan)}</td><td>${fmt(r.lend)}</td><td>${diffCell(r.net)}</td><td>${fmt(r.ratio, 2)}</td><td class="${num(r.fee) > 0 ? "down" : ""}">${num(r.fee) === null ? "—" : fmtPrice(r.fee)}</td><td>${r.feeDays ?? "—"}</td></tr>`).join("")}</tbody></table></div>`);
     }
     const large = x.large || [];
-    if (large.length) parts.push(`<div class="row-head"><h3>大量保有報告書(5% ルール)</h3><small>EDINET。保有割合が 5% を超えたとき・1% 以上動いたときに出る</small></div><div class="table-wrap"><table class="grid"><thead><tr><th>提出日</th><th class="left">提出者</th><th>保有割合</th><th>前回</th><th>増減</th><th class="left">書類</th></tr></thead><tbody>${large.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => { const ch = num(r.ratio) !== null && num(r.prevRatio) !== null ? r.ratio - r.prevRatio : null; return `<tr><th>${esc(r.date)}</th><td class="left">${esc(r.filer)}${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${num(r.ratio) === null ? "—" : `${num(r.ratio).toFixed(2)}%`}</td><td>${num(r.prevRatio) === null ? "—" : `${num(r.prevRatio).toFixed(2)}%`}</td><td class="${cls(ch)}">${ch === null ? "—" : `${ch >= 0 ? "+" : ""}${ch.toFixed(2)}pt`}</td><td class="left">${r.docID ? `<a href="${EDINET_DOC(r.docID)}" target="_blank" rel="noopener">${esc(r.desc || r.docID)}</a>` : esc(r.desc || "")}</td></tr>`; }).join("")}</tbody></table></div>`);
+    if (large.length) parts.push(`<div class="row-head"><h3>大量保有報告書(5% ルール)</h3><small>EDINET。保有割合が 5% を超えたとき・1% 以上動いたときに出る</small></div><div class="table-wrap"><table class="grid"><thead><tr><th>提出日</th><th class="left">提出者</th><th>保有割合</th><th>前回</th><th>増減</th><th class="left">書類</th></tr></thead><tbody>${large.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => { const ch = num(r.ratio) !== null && num(r.prevRatio) !== null ? r.ratio - r.prevRatio : null; return `<tr><th>${esc(r.date)}</th><td class="left">${esc(r.filer)}${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${num(r.ratio) === null ? "—" : `${num(r.ratio).toFixed(2)}%`}</td><td>${num(r.prevRatio) === null ? "—" : `${num(r.prevRatio).toFixed(2)}%`}</td><td class="${cls(ch)}">${ch === null ? "—" : `${ch >= 0 ? "+" : ""}${ch.toFixed(2)}pt`}</td><td class="left">${r.docID ? `<a href="${EDINET_DOC(r.docID)}" target="_blank" rel="noopener noreferrer">${esc(r.desc || r.docID)}</a>` : esc(r.desc || "")}</td></tr>`; }).join("")}</tbody></table></div>`);
     const bb = x.buyback || [];
-    if (bb.length) parts.push(`<div class="row-head"><h3>自己株券買付状況報告書</h3><small>EDINET。自社株買いの枠がある間、毎月の買付の実績を報告する</small></div><div class="table-wrap"><table class="grid left"><thead><tr><th>提出日</th><th>書類</th></tr></thead><tbody>${bb.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => `<tr><th>${esc(r.date)}</th><td>${r.docID ? `<a href="${EDINET_DOC(r.docID)}" target="_blank" rel="noopener">${esc(r.desc || r.docID)}</a>` : esc(r.desc || "")}</td></tr>`).join("")}</tbody></table></div>`);
+    if (bb.length) parts.push(`<div class="row-head"><h3>自己株券買付状況報告書</h3><small>EDINET。自社株買いの枠がある間、毎月の買付の実績を報告する</small></div><div class="table-wrap"><table class="grid left"><thead><tr><th>提出日</th><th>書類</th></tr></thead><tbody>${bb.slice().sort((a, b) => (a.date < b.date ? 1 : -1)).map((r) => `<tr><th>${esc(r.date)}</th><td>${r.docID ? `<a href="${EDINET_DOC(r.docID)}" target="_blank" rel="noopener noreferrer">${esc(r.desc || r.docID)}</a>` : esc(r.desc || "")}</td></tr>`).join("")}</tbody></table></div>`);
     return (parts.join("") || empty("この銘柄の機関の需給データはありません(空売り残高の報告・大量保有の提出などが無い)。")) + `<p class="foot">取得: ${esc(String(x.updatedAt || "").slice(0, 16).replace("T", " "))}。出典: JPX(空売り残高情報)・日本証券金融(貸借取引残高・品貸料)・EDINET。</p>`;
   }
 
@@ -1674,7 +1686,7 @@
       item("会計基準(直近)", esc((k.annual || []).filter((x) => !x.forecast).at(-1)?.acct || "—")), item("売買代金順位", r.rank ? `#${r.rank}` : "—"),
     ].join("")}</dl>
       ${facts.length ? `<div class="row-head"><h3>開示・報道ベースの取引関係</h3><small>${facts.length}件</small></div><div class="peer-grid">${facts.map((f) => `<article><header><b>${esc(f.name)}</b><small>${esc(f.code)} · ${esc(f.market || "")}</small><em>${esc(typeLabel[f.type] || f.type || "関係")}${f.direction === "in" ? "(被参照)" : ""}</em></header><p>${esc(f.note || "")}</p><footer><small>有効 ${esc(f.validFrom || "—")}〜${esc(f.validTo || "")} · 根拠 ${esc(evLabel[f.evidence] || f.evidence || "—")}</small>${S.byCode.has(f.code) ? `<button type="button" class="link" data-code="${esc(f.code)}">チャート ›</button>` : ""}</footer></article>`).join("")}</div>` : ""}
-      ${news.length ? `<div class="row-head"><h3>関連ニュース(stockAI が保存した見出し)</h3></div><div class="table-wrap"><table class="grid left"><tbody>${news.map((n) => `<tr><th>${esc(String(n.publishedAt || "").slice(0, 16).replace("T", " "))}</th><td class="left"><a href="${esc(n.url || "#")}" target="_blank" rel="noopener noreferrer">${esc(n.title)}</a></td><td><small>${esc(n.source || "")}</small></td></tr>`).join("")}</tbody></table></div>` : ""}`;
+      ${news.length ? `<div class="row-head"><h3>関連ニュース(stockAI が保存した見出し)</h3></div><div class="table-wrap"><table class="grid left"><tbody>${news.map((n) => `<tr><th>${esc(String(n.publishedAt || "").slice(0, 16).replace("T", " "))}</th><td class="left"><a href="${safeUrl(n.url)}" target="_blank" rel="noopener noreferrer">${esc(n.title)}</a></td><td><small>${esc(n.source || "")}</small></td></tr>`).join("")}</tbody></table></div>` : ""}`;
   }
   function tabSaved(d, cur) {
     const have = ARCHIVE_SOURCES.filter(([k]) => cur.archives?.[k]);
@@ -1688,7 +1700,7 @@
     const used = (cur.credit || []).filter((r) => r.source === `${srcLabel}保存`).length;
     return `<div class="row-head">${seg(ARCHIVE_SOURCES.map(([k, l]) => [k, `${l.replace("保存", "")}${cur.archives?.[k] ? "" : "(なし)"}`]), srcKey, "savedsrc")}<h3>${esc(srcLabel)} 保存分(${esc(String(a.fetchedAt || "").slice(0, 16).replace("T", " "))} 取得)</h3>${seg(pages.map((p) => [p.name, `${p.label || p.name}${p.status && p.status !== 200 ? ` (${p.status})` : ""}`]), sel?.name, "irpage")}</div>
       ${a.margin?.length ? `<p class="foot">信用残の履歴 ${a.margin.length} 回(${esc(a.margin[0].date)}〜${esc(a.margin.at(-1).date)})。${cur.code === "market" ? "指数のチャートの信用残に使っています(東証全体)。" : `このうち stockAI に無い日付の ${used} 回を「信用残」タブとチャートにつないでいます(同じ日付は stockAI を優先)。`}</p>` : ""}
-      ${sel ? `<p class="foot"><a href="${esc(sel.url)}" target="_blank" rel="noopener">${esc(sel.url)}</a>${sel.title ? ` · ${esc(sel.title)}` : ""}</p>${tables || empty("このページに表はありませんでした。")}` : empty("保存されたページがありません。")}`;
+      ${sel ? `<p class="foot"><a href="${safeUrl(sel.url)}" target="_blank" rel="noopener noreferrer">${esc(sel.url)}</a>${sel.title ? ` · ${esc(sel.title)}` : ""}</p>${tables || empty("このページに表はありませんでした。")}` : empty("保存されたページがありません。")}`;
   }
 
   // =====================================================================
@@ -1716,10 +1728,37 @@
     (splits || []).forEach(([d, r]) => { const x = Number(r); if (x > 1 && d >= SRCal.add(todayJst(), -730) && Math.abs(Math.log(est / (out * x))) < Math.abs(Math.log(est / out)) - 0.2) out *= x; });
     return out;
   }
-  function computeRank(data) {
+  // 全銘柄の推定(400銘柄 × 信用残の推定 + 感応度)は重いので、30ms ごとに画面へ制御を返しながら計算する(Chrome の「応答なし」を防ぐ)。
+  // 同じデータ・同じ推定法の結果は覚えておき、ページの行き来や推定法の切り替えで計算し直さない
+  const rankMemo = new Map();
+  const yieldToUi = () => new Promise((r) => setTimeout(r, 0));
+  // 推定法を続けて切り替えたとき、古い計算の結果で上書きしない
+  let rankSeq = 0;
+  async function refreshRank(onProgress) { const seq = ++rankSeq; const list = await computeRank(S.rankData, onProgress); if (seq !== rankSeq) return false; S.rank = list; return true; }
+  function rankProgressStep(label, prog = $("#rankProgress")) {
+    return (done, total) => { if (!prog) return; prog.hidden = done >= total; $("i", prog).style.width = `${Math.round(done / total * 100)}%`; $("span", prog).textContent = `${label} ${done}/${total}`; };
+  }
+  async function computeRank(data, onProgress) {
     const method = $("#rankMethod")?.value || S.set.creditMethod;
+    const memo = rankMemo.get(method); if (memo && memo.data === data) return memo.list;
+    // 計算中に同じ要求が来たら(ページの行き来など)、同じ計算を待つ
     const factors = { tpx: idxRows("TPX"), fx: idxRows("USDJPY"), tnx: idxRows("TNX") };
-    const list = S.preds.map((p) => {
+    const job = (async () => {
+    const list = []; let t0 = performance.now();
+    for (let i = 0; i < S.preds.length; i++) {
+      list.push(rankRow(S.preds[i]));
+      if (performance.now() - t0 > 30) { onProgress?.(i + 1, S.preds.length); await yieldToUi(); t0 = performance.now(); }
+    }
+    onProgress?.(S.preds.length, S.preds.length);
+    // RS スコアの順位(0〜1、1 が一番強い)
+    const rsAll = list.map((x) => x.rs).filter((v) => v !== null).sort((a, b) => a - b);
+    list.forEach((x) => { x.rsPct = x.rs === null || !rsAll.length ? null : rsAll.filter((v) => v <= x.rs).length / rsAll.length; });
+    return list;
+    })();
+    rankMemo.set(method, { data, list: job });
+    job.catch(() => rankMemo.delete(method));
+    return job;
+    function rankRow(p) {
       const d = data.details[p.code], c = data.charts[p.code]; if (d && !d.sharesFixed) { d.shares = fixShares(d.shares, d.fund, c?.splits); d.sharesFixed = true; }
       const est = d && c ? SRCredit.estimateCredit(dropErrata(d.credit), c.prices, c.splits, { method }) : { rows: [] };
       const rows = est.rows; const last = rows.at(-1) || null; const price = c?.prices.at(-1)?.c ?? p.close;
@@ -1735,11 +1774,7 @@
         mcap: d?.shares && price ? d.shares * price : null, buyToMcap: d?.shares && last?.buy ? last.buy * (last.splitFactor || 1) / d.shares : null, rows, shares: d?.shares || null,
         rs: SRAna.rsScore(daily), exp3m: exp?.buy.share ?? null, exp3mAmount: exp?.buy.amount ?? null, fx: sens?.main?.fx.b ?? null, beta: sens?.main?.beta.b ?? null,
       };
-    });
-    // RS スコアの順位(0〜1、1 が一番強い)
-    const rsAll = list.map((x) => x.rs).filter((v) => v !== null).sort((a, b) => a - b);
-    list.forEach((x) => { x.rsPct = x.rs === null || !rsAll.length ? null : rsAll.filter((v) => v <= x.rs).length / rsAll.length; });
-    return list;
+    }
   }
   // 全銘柄合計(金額加重)の推定評価損益率の推移。週ごとに各銘柄の最後の観測を足し合わせる
   function aggregateSeries(list) {
@@ -1761,7 +1796,7 @@
       $("#rankIndustry").innerHTML += inds.map((x) => `<option>${esc(x)}</option>`).join("");
       ["#rankFilter", "#rankIndustry", "#rankNoWarm"].forEach((s) => $(s).addEventListener("input", drawRankTable));
       $("#rankMethod").value = S.set.creditMethod;
-      $("#rankMethod").addEventListener("change", () => { S.set.creditMethod = $("#rankMethod").value; saveSettings(); S.rank = computeRank(S.rankData); S.mmStocks = null; drawRankTable(); drawRankAgg(); drawMarginModel(); });
+      $("#rankMethod").addEventListener("change", async () => { S.set.creditMethod = $("#rankMethod").value; saveSettings(); if (!S.rankData) return; if (!(await refreshRank(rankProgressStep("推定を計算中")))) return; S.mmStocks = null; drawRankAgg(); await yieldToUi(); drawRankTable(); await yieldToUi(); drawMarginModel(); });
       table.addEventListener("click", (e) => { const th = e.target.closest("th[data-sort]"); if (th) { const k = th.dataset.sort; RK.desc = RK.sort === k ? !RK.desc : true; RK.sort = k; drawRankTable(); return; } const b = e.target.closest("[data-code]"); if (b) goChart(b.dataset.code); });
     }
     // 「相関を探す」で先に読み込んだときは、合計とモデルがまだ描かれていない
@@ -1770,7 +1805,10 @@
     if (!$("#rankRatio").innerHTML) drawRatioModel();
     table.innerHTML = '<tbody><tr><td class="muted pad">全銘柄の信用残と株価を読み込んでいます…(初回は十数MBの復号があります)</td></tr></tbody>';
     try { S.rankData = await loadRankData(); } catch (e) { table.innerHTML = `<tbody><tr><td class="pad">読み込めませんでした: ${esc(e.message)}</td></tr></tbody>`; return; }
-    S.rank = computeRank(S.rankData); drawRankTable(); drawRankAgg(); drawRatioModel(); drawMarginModel();
+    table.innerHTML = '<tbody><tr><td class="muted pad">全銘柄の信用残の推定を計算しています…</td></tr></tbody>';
+    if (!(await refreshRank(rankProgressStep("推定を計算中")))) return;
+    // 表(400行)とチャートを同じタスクで作ると、チャートの寸法を測るときに表のレイアウトまで待たされるので分ける
+    drawRankAgg(); await yieldToUi(); drawRankTable(); await yieldToUi(); drawRatioModel(); drawMarginModel();
   }
   const RANK_COLS = [
     ["code", "銘柄", (x) => `<button type="button" class="link" data-code="${esc(x.code)}"><b>${esc(x.code)}</b> ${esc(x.name || "")}</button><small>${esc(x.industry || "")}</small>`, "s"],
@@ -1845,7 +1883,7 @@
         元データ: ${esc(cm.source || "")}(stockAI の scripts/build_margin_market.py)。</p></section>`;
     RM.chart?.remove(); RM.chart = null;
     const el = $("#rmChart"); if (!el) return;
-    RM.chart = LW.createChart(el, { autoSize: true, ...chartTheme(), localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" } });
+    RM.chart = LW.createChart(el, { autoSize: true, ...chartTheme(), ...PAGE_CHART, localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" } });
     const pf = { type: "custom", formatter: (v) => `${v.toFixed(2)}倍`, minMove: 0.01 };
     const ln = (o) => RM.chart.addSeries(LW.LineSeries, { priceFormat: pf, lastValueVisible: false, priceLineVisible: false, ...o });
     const from = SRMargin.cleanDaily(cm.daily)[0]?.date || "";
@@ -1878,18 +1916,24 @@
   }
   async function drawMarginModel() {
     const box = $("#rankModel"); if (!box || !S.rank) return;
+    // 計算の途中で描き直しが始まったら(推定法の切り替えなど)、古い方はそこでやめる
+    const seq = (drawMarginModel.seq = (drawMarginModel.seq || 0) + 1); const stale = () => seq !== drawMarginModel.seq;
     box.innerHTML = '<section class="panel"><p class="muted">信用評価損益率のモデルを計算中…</p></section>';
-    const targets = await marginTargets(); const stocks = marginStocks();
+    const targets = await marginTargets(); if (stale()) return; const stocks = marginStocks();
+    await yieldToUi(); if (stale()) return;
     const built = SRMargin.build(stocks, MM.kg, MM.kg); const model = SRMargin.fit(targets, built);
     const days = idxRows("TPX").map((r) => r.d); const now = SRMargin.nowcast(model, built, days);
-    // 比べるもの: 回転なし(先入れ先出しだけ)と、建て替えの割合を変えたもの
-    const comp = [0, 0.05, 0.1, 0.2].map((k) => { const f = k === MM.kg ? model : SRMargin.fit(targets, SRMargin.build(stocks, k, k)); return { k, mae: f.mae, rmse: f.rmse, hit: f.hit, b: f.b }; });
+    // 比べるもの: 回転なし(先入れ先出しだけ)と、建て替えの割合を変えたもの。1つ計算するごとに画面へ制御を返す
+    const comp = [];
+    for (const k of [0, 0.05, 0.1, 0.2]) { await yieldToUi(); if (stale()) return; const f = k === MM.kg ? model : SRMargin.fit(targets, SRMargin.build(stocks, k, k)); comp.push({ k, mae: f.mae, rmse: f.rmse, hit: f.hit, b: f.b }); }
     // 2026-11-11: 全銘柄の約定金額ベース(JPX 銘柄別信用取引残高の全銘柄 × 終値 ÷ 約定金額。stockAI の build_margin_market.py)と、
     //   素朴な比較相手「前回の公表値 + b × TOPIX の騰落(対数)」。同じ週どうしでも比べる
-    await marketCredit().catch(() => null);
+    await marketCredit().catch(() => null); if (stale()) return;
     const cmDaily = S.market?.creditMarket?.daily || []; const linkOf = SRMargin.linkSeries(cmDaily);
+    await yieldToUi(); if (stale()) return;
     const pdf = cmDaily.length ? SRMargin.fitX(targets, linkOf, { minTrain: 3 }) : null;
     const pdfNow = pdf ? SRMargin.nowcastX(pdf, linkOf, SRMargin.cleanDaily(cmDaily).map((r) => r.date)) : [];
+    await yieldToUi(); if (stale()) return;
     const tpxOf = SRMargin.logIndex(idxRows("TPX")); const tpx = SRMargin.fitX(targets, tpxOf, { minTrain: 12 });
     const evalW = new Set((pdf?.weekly || []).filter((o) => o.pred !== null).map((o) => o.date));
     const same = evalW.size ? [["前回の公表値のまま", SRMargin.score(pdf.weekly, evalW), true], [`推定 x(建て替え ${Math.round(MM.kg * 100)}%/週)`, SRMargin.score(model.weekly, evalW)], ["TOPIX の騰落", SRMargin.score(tpx.weekly, evalW)], ["全銘柄の約定金額", SRMargin.score(pdf.weekly, evalW)]] : [];
@@ -1944,7 +1988,7 @@
     $$("[data-mm-del]", box).forEach((b) => b.addEventListener("click", () => { LS.set("stockrank-marginpl", LS.get("stockrank-marginpl", []).filter((r) => r.date !== b.dataset.mmDel)); drawMarginModel(); }));
     MM.chart?.remove(); MM.chart = null;
     const el = $("#mmChart"); if (!el) return;
-    MM.chart = LW.createChart(el, { autoSize: true, ...chartTheme(), localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, leftPriceScale: { visible: true, borderColor: css("--tv-border") } });
+    MM.chart = LW.createChart(el, { autoSize: true, ...chartTheme(), ...PAGE_CHART, localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, leftPriceScale: { visible: true, borderColor: css("--tv-border") } });
     const pf = { type: "custom", formatter: (v) => `${v.toFixed(1)}%`, minMove: 0.1 };
     const ln = (o) => MM.chart.addSeries(LW.LineSeries, { priceFormat: pf, lastValueVisible: false, priceLineVisible: false, ...o });
     const xs = ln({ color: alpha(css("--muted") || "#888888", 0.6), lineWidth: 1, priceScaleId: "left", title: "対象銘柄の推定 x" }); xs.setData([...model.weekly.map((o) => ({ time: o.date, value: o.x })), ...now.map((o) => ({ time: o.date, value: o.x }))].filter((o, i, a) => !i || o.time > a[i - 1].time));
@@ -1973,7 +2017,7 @@
       <section class="panel"><div class="row-head"><h3>対象銘柄合計の推定信用評価損益率と信用倍率(週次)</h3><small>買い方が −20% 前後まで悪化すると投げ(セリング・クライマックス)が出やすい、と一般に言われる水準。あくまで stockAI の対象銘柄だけの推定</small></div><div id="rankAggChart" class="mini-chart"></div></section>`;
     rankChart?.remove(); rankChart = null;
     if (agg.length < 2) return;
-    rankChart = LW.createChart($("#rankAggChart"), { autoSize: true, ...chartTheme(), localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, rightPriceScale: { ...chartTheme().rightPriceScale }, leftPriceScale: { visible: true, borderColor: css("--tv-border") } });
+    rankChart = LW.createChart($("#rankAggChart"), { autoSize: true, ...chartTheme(), ...PAGE_CHART, localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, rightPriceScale: { ...chartTheme().rightPriceScale }, leftPriceScale: { visible: true, borderColor: css("--tv-border") } });
     const pf = { type: "custom", formatter: (v) => `${v.toFixed(1)}%`, minMove: 0.1 };
     const b = rankChart.addSeries(LW.LineSeries, { color: css("--credit-buy"), lineWidth: 2, priceFormat: pf, title: "買い方" }); b.setData(agg.filter((o) => o.buyPnl !== null).map((o) => ({ time: o.time, value: o.buyPnl * 100 })));
     const s = rankChart.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, priceFormat: pf, title: "売り方" }); s.setData(agg.filter((o) => o.sellPnl !== null).map((o) => ({ time: o.time, value: o.sellPnl * 100 })));
@@ -2050,7 +2094,7 @@
     const ctl = $("#exControls"), body = $("#exBody");
     if (!S.rank) {
       body.innerHTML = '<p class="muted pad">全銘柄の株価・信用残・業績を読み込んでいます…(ランキングと同じデータ。初回は十数MBの復号があります)</p>';
-      try { S.rankData = await loadRankData($("#exProgress")); S.rank = computeRank(S.rankData); } catch (e) { body.innerHTML = `<p class="pad">読み込めませんでした: ${esc(e.message)}</p>`; return; }
+      try { S.rankData = await loadRankData($("#exProgress")); await refreshRank(); } catch (e) { body.innerHTML = `<p class="pad">読み込めませんでした: ${esc(e.message)}</p>`; return; }
     }
     if (!S.exStocks) S.exStocks = exStocks();
     if (!S.exInst) loadExInst().then(() => { if (S.view === "explore" && ["機関の需給"].some((g) => [EX.x, EX.y, EX.rankKey].some((k) => SRExplore.byKey[k].group === g))) renderExplore(); });
@@ -2411,7 +2455,7 @@
   // [[日付, 値], ...] の系列を折れ線(kind=bar なら棒)で描く
   function drawMacroChart(el, series, kind) {
     macroChart?.remove();
-    macroChart = LW.createChart(el, { autoSize: true, ...chartTheme(), localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" } });
+    macroChart = LW.createChart(el, { autoSize: true, ...chartTheme(), ...PAGE_CHART, localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" } });
     series.forEach((sr, i) => {
       const data = sr.points.map(([d, v]) => ({ time: normDate(d), value: num(v) })).filter((p) => p.time && p.value !== null).sort((a, b) => (a.time < b.time ? -1 : 1));
       const uniq = data.filter((p, j) => j === 0 || p.time !== data[j - 1].time);

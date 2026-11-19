@@ -18,7 +18,8 @@
   const DAY = 864e5;
   const EXPIRY_DAYS = 182;
   const num = (v) => { const n = typeof v === "string" ? Number(v.replace(/,/g, "")) : Number(v); return v === null || v === undefined || v === "" || !Number.isFinite(n) ? null : n; };
-  const toTime = (d) => Date.parse(`${String(d).slice(0, 10)}T00:00:00Z`);
+  const T_CACHE = new Map();
+  const toTime = (d) => { const k = String(d).slice(0, 10); let v = T_CACHE.get(k); if (v === undefined) { v = Date.parse(`${k}T00:00:00Z`); if (T_CACHE.size > 50000) T_CACHE.clear(); T_CACHE.set(k, v); } return v; };
   const isoDate = (t) => new Date(t).toISOString().slice(0, 10);
 
   // 分割: [[日付, 比率], ...]。比率 2 = 1株→2株。日足はさかのぼって調整済み(Future Sight と同じ前提)

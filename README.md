@@ -108,6 +108,15 @@ PC に週次のタスクを登録していた場合は、止めておきます:
 Unregister-ScheduledTask -TaskName "StockRank Kabutan weekly" -Confirm:$false
 ```
 
+## 速さと安全のための決まり(2026-11-19)
+
+- **固まらないように**: ランキング・信用の全銘柄の推定(信用残の取得コストの追跡・感応度)と信用評価損益率のモデルは、30ms ごとに画面へ制御を返しながら計算する(`computeRank` / `drawMarginModel`)。同じデータ・同じ推定法の結果は覚えておき、ページの行き来では計算し直さない。日付の変換と因子の表はキャッシュする。
+- **ページの中のチャート**(ランキング・信用、マクロ)は、マウスホイールでページがスクロールするようにした(ホイールで縮小されて線が右端に潰れるのを防ぐ)。拡大縮小はドラッグ・軸のドラッグ・ピンチ・軸のダブルクリックで戻す。
+- **CSP**(`index.html` の meta): 読み込めるのはこのサイトの JS/CSS だけ。データの取得先は同じ github.io(Future Sight)と raw.githubusercontent.com だけ。インラインのスクリプトは禁止(テーマの先読みは `assets/js/preload.js`)。他サイトの iframe の中では表示しない。
+- **鍵の保存**: 「この端末で覚える」の鍵は IndexedDB に取り出せない鍵(non-extractable の CryptoKey)として置く。以前の localStorage の生の鍵は、次に開いたとき自動で移して消す。覚えない場合は、そのタブを閉じるまで sessionStorage。
+- **外部リンク**は http(s) だけ通し、`rel="noopener noreferrer"`。取得したデータの値はすべて `esc()` を通して表示する。
+- **GitHub Actions**: 手動実行の入力は環境変数で渡す(`${{ }}` を run に直接書かない)。
+
 ## 公開(GitHub Pages)
 
 Settings → Pages → Source を「Deploy from a branch」にして、このブランチの `/ (root)` を選びます。

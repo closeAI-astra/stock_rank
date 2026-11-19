@@ -4,12 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
+  <!-- セキュリティ: 読み込めるのはこのサイトの JS/CSS だけ、データの取得先は同じ github.io(Future Sight)と raw.githubusercontent.com だけ。
+       インラインのスクリプト・外部のスクリプト・プラグイン・他所へのフォーム送信を禁止(データの値に紛れた文字が実行されないように) -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://closeai-astra.github.io https://raw.githubusercontent.com; worker-src 'self' blob:; manifest-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+  <meta name="referrer" content="no-referrer">
   <title>Stock Rank</title>
   <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
-  <link rel="stylesheet" href="assets/css/app.css?v=91cecdd02e">
-  <!-- テーマは Future Sight と同じ保存先(同じ github.io なら両方に効く)。読み込み前に当てて、ちらつきを防ぐ -->
-  <script>try { if (localStorage.getItem("stockrank-sidebar") === "closed") document.documentElement.classList.add("sidebar-closed"); } catch { /* */ }</script>
-  <script>try { const t = localStorage.getItem("future-sight-theme"); if (["light", "dark", "prototype", "earth"].includes(t)) document.documentElement.dataset.fsTheme = t; } catch { /* */ }</script>
+  <link rel="stylesheet" href="assets/css/app.css?v=211073b226">
+  <script src="assets/js/preload.js?v=06519fa1e5"></script>
 </head>
 <body>
   <div class="ambient ambient-a" aria-hidden="true"></div>
@@ -220,15 +222,15 @@
     <input id="indModalInput" type="search" placeholder="検索(例: 移動平均 / 信用 / RSI)" autocomplete="off">
     <div id="indModalList" class="modal-list"></div></div></div>
   <script src="assets/vendor/lightweight-charts.standalone.production.js?v=3333da377a"></script>
-  <script src="assets/js/credit.js?v=550b13096e"></script>
-  <script src="assets/js/data.js?v=8690f724aa"></script>
+  <script src="assets/js/credit.js?v=922ea7e5a7"></script>
+  <script src="assets/js/data.js?v=e7538c92af"></script>
   <script src="assets/js/indicators.js?v=ab227dd66f"></script>
-  <script src="assets/js/analytics.js?v=46ee895628"></script>
+  <script src="assets/js/analytics.js?v=fe84eea013"></script>
   <script src="assets/js/trades.js?v=215a726e0f"></script>
-  <script src="assets/js/marginmodel.js?v=4f76b77e70"></script>
+  <script src="assets/js/marginmodel.js?v=90e33b1b06"></script>
   <script src="assets/js/explore.js?v=e48161fdac"></script>
   <script src="assets/js/calendar.js?v=b45de4fd75"></script>
   <script src="assets/js/drawings.js?v=853bb759a2"></script>
-  <script src="assets/js/app.js?v=69f0f035bd"></script>
+  <script src="assets/js/app.js?v=da21ae6d23"></script>
 </body>
 </html>

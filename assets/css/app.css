@@ -282,7 +282,7 @@ html[data-fs-theme="dark"] .seg button.active, html[data-fs-theme="earth"] .seg 
 
 /* 表 */
 .table-wrap { overflow: auto; max-width: 100%; margin-bottom: 12px; }
-.table-wrap.tall { max-height: 460px; }
+.table-wrap.tall { max-height: 460px; contain: content; } /* 縦に長い表のレイアウトを枠の中に閉じ込め、周りのチャートの再計算を軽くする */
 table.grid { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 12px; }
 table.grid th, table.grid td { padding: 8px 10px; border: 1px solid var(--line); text-align: right; white-space: nowrap; }
 table.grid thead th { position: sticky; top: 0; z-index: 2; background: var(--panel-solid); background-image: linear-gradient(color-mix(in srgb, var(--panel-muted) 80%, transparent), color-mix(in srgb, var(--panel-muted) 80%, transparent)); color: var(--muted); font-weight: 700; font-size: 11px; text-align: center; }
@@ -552,3 +552,7 @@ table.ex-mat td:hover { outline: 2px solid var(--accent); }
 .mm-detail { margin: 10px 0; } .mm-detail summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .mm-form { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
 .mm-chip { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin: 2px; }
+
+/* 古い参考の表をたたんでおく枠 */
+.panel-details { margin: 8px 0 14px; }
+.panel-details > summary { cursor: pointer; color: var(--muted, #888); font-size: 13px; padding: 6px 0; }
