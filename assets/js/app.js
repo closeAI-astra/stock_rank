@@ -1838,16 +1838,28 @@
   }
   // ---------- 信用倍率(2市場)の予想 ----------
   // 公表値: JPX 信用取引現在高(週次・申込日は金曜・翌週の火曜に公表。data/inst/market の margin)
-  // 推定: stockAI が JPX 銘柄別信用取引残高(東証・全銘柄・毎営業日・翌営業日に公表)を合計したもの(Future Sight の market.creditMarket)。
-  //   金曜申込分の全銘柄の合計は月曜に出るので、公表(火曜)の前日に信用倍率がほぼ分かる。週の途中は「今の値のまま」
+  // 実データ(先回り集計): stockAI が JPX 銘柄別信用取引残高(東証・全銘柄・毎営業日・翌営業日 16時に公表)を合計したもの(Future Sight の market.creditMarket)。
+  //   金曜申込分の合計は月曜に出るので、公表(火曜)の前日に信用倍率がほぼ分かる。これは集計で、予測ではない。
+  // 予測: その日の引け(15:30)の時点で公表済みのデータだけで出す値(SRMargin.ratioForecasts。2026-11-19 から分けて表示)
   const RM = { chart: null };
   async function drawRatioModel() {
     const box = $("#rankRatio"); if (!box) return;
     await marketCredit().catch(() => null);
     const cm = S.market?.creditMarket; const off = (S.instMarket?.margin || []).filter((r) => num(r.buy) !== null && num(r.sell));
-    const head = '<div class="row-head"><h3>信用倍率・信用評価損益率(2市場)の予想</h3><small>JPX が毎週火曜に公表する東証・名証の信用倍率(買残 ÷ 売残、株数)と、日経の信用評価損益率(買い方)を、毎営業日の全銘柄の信用残(翌営業日 16時ごろ公表)から先に出します。公表の無い日のおおよその値です</small></div>';
+    const head = '<div class="row-head"><h3>信用倍率・信用評価損益率(2市場)の予想</h3><small>JPX が毎週火曜に公表する東証・名証の信用倍率(買残 ÷ 売残、株数)と、日経の信用評価損益率(買い方)を、毎営業日の全銘柄の信用残(翌営業日 16時ごろ公表)から先に出します。<b class="tag-fc">予測</b>(その日の引けの時点で分かっていた情報だけ)と<b class="tag-act">実データ</b>(全銘柄の合計。金曜の分は公表値の前日に分かる先回り集計)を分けて表示します</small></div>';
     if (!cm?.daily?.length) { box.innerHTML = `<section class="panel">${head}${empty("全銘柄の信用残の合計(stockAI の scripts/build_margin_market.py)がまだ公開されていません。")}</section>`; return; }
-    const chk = SRMargin.ratioCheck(off, cm.daily); const nc = SRMargin.ratioNowcast(off, cm.daily, chk);
+    const chk = SRMargin.ratioCheck(off, cm.daily);
+    // 予測(その日の引けの時点で公表済みのデータだけ)と、実データ(全銘柄の合計 = 翌営業日に分かる先回り集計)を分ける
+    const bizCal = SRCal.makeBizCal(idxRows("TPX").map((r) => r.d));
+    const todayD = bizCal.next(todayJst()); // 土日・祝日なら次の営業日
+    let friD = SRMargin.friday(todayD); if (!bizCal.isBiz(friD)) friD = bizCal.prev(friD); // 金曜が休みの週の申込日は前の営業日
+    const fcRows = SRMargin.ratioForecasts(cm.daily, off, [todayD, friD], bizCal.isBiz);
+    const fcToday = fcRows.find((r) => r.date === todayD), fcFri = friD !== todayD ? fcRows.find((r) => r.date === friD) : null;
+    const lastAct = fcRows.filter((r) => r.actual !== null).at(-1);
+    const graded0 = fcRows.filter((r) => r.fc !== null && r.actual !== null).slice(-40);
+    const fcMae = graded0.length ? graded0.reduce((a, r) => a + Math.abs(r.fc - r.actual), 0) / graded0.length : null;
+    const fcCover = graded0.filter((r) => r.lo !== null).length ? graded0.filter((r) => r.lo !== null && r.actual >= r.lo && r.actual <= r.hi).length / graded0.filter((r) => r.lo !== null).length : null;
+    const fcCard = (r, label) => (r && r.fc !== null ? `<article class="is-forecast"><span>予測 · ${label}</span><strong>${r.fc.toFixed(2)}<small>倍</small></strong><em>${esc(r.date)} の引け(15:30)の時点で公表済みの、${esc(r.base)} 申込分の全銘柄の合計から(${r.gap}営業日先・今の値のまま)。95% の幅 ${r.lo === null ? "—" : r.lo.toFixed(2)}〜${r.hi === null ? "—" : r.hi.toFixed(2)}</em></article>` : "");
     const targets = await marginTargets().catch(() => []);
     const graded = SRMargin.gradeNowcasts(cm.nowcast, off, targets).reverse();
     const dEst = SRMargin.dailyEstimates(cm.daily, targets, off); const dLast = dEst.filter((r) => r.pl !== null).at(-1);
@@ -1860,16 +1872,22 @@
     box.innerHTML = `<section class="panel">${head}
       <div class="cards">
         <article><span>最新の公表値</span><strong>${lastOff ? r3(lastOff.buy / lastOff.sell) : "—"}<small>倍</small></strong><em>${esc(lastOff?.date || "")} 申込分 · 買残 ${lastOff ? (lastOff.buy / 1e8).toFixed(2) : "—"}億株・売残 ${lastOff ? (lastOff.sell / 1e8).toFixed(2) : "—"}億株</em></article>
-        ${nc ? `<article><span>${esc(nc.target)} 申込分の推定</span><strong>${r3(nc.ratio)}<small>倍</small></strong><em>${nc.remaining ? `${esc(nc.basis)} の全銘柄の合計から(金曜まで残り ${nc.remaining}営業日・今の値のまま)。95% の幅 ${r3(nc.lo)}〜${r3(nc.hi)}` : `${esc(nc.basis)} 申込分の全銘柄の合計(公表前)。買残 ${(nc.buy / 1e8).toFixed(2)}億株・売残 ${(nc.sell / 1e8).toFixed(2)}億株`}</em></article>` : ""}
-        <article><span>全銘柄の合計(最新)</span><strong>${lastD ? r3(lastD.buy_sh / lastD.sell_sh) : "—"}<small>倍</small></strong><em>${esc(lastD?.date || "")} 申込分 · ${fmt(lastD?.n_issues)}銘柄 · 買残 ${lastD ? (lastD.buy_sh / 1e8).toFixed(2) : "—"}億株・金額 ${oku(lastD?.buy_val)}円(約定ベース)</em></article>
+        ${fcCard(fcToday, `今日(${esc(todayD)})の信用倍率`)}
+        ${fcCard(fcFri, `${esc(friD)} 申込分(公表は ${esc(fcFri?.offDue || "")} の予定)`)}
+        ${lastAct ? `<article class="is-actual"><span>実データ(先回り集計)· ${esc(lastAct.date)} 申込分</span><strong>${lastAct.actual.toFixed(2)}<small>倍</small></strong><em>全銘柄(${fmt(lastD?.n_issues)}銘柄)の合計 × 名証の分の比。${esc(lastAct.actualAt || "")} の16時ごろに判明した確定の値で、予測ではありません${new Date(`${lastAct.date}T00:00:00Z`).getUTCDay() === 5 && lastAct.off === null ? `。金曜の分なので、公表値(${esc(lastAct.offDue || "")} 公表の予定)とほぼ同じ値` : ""}。買残 ${lastD ? (lastD.buy_sh / 1e8).toFixed(2) : "—"}億株・売残 ${lastD ? (lastD.sell_sh / 1e8).toFixed(2) : "—"}億株</em></article>` : ""}
         <article><span>信用評価損益率 最新の公表値</span><strong class="${cls(lastPl?.y)}">${pct2(lastPl?.y)}</strong><em>${esc(lastPl?.date || "")} 申込分 · ${esc(lastPl?.src || "")}</em></article>
         ${dLast ? `<article><span>信用評価損益率の推定(${esc(dLast.date)})</span><strong class="${cls(dLast.pl)}">${pct2(dLast.pl)}</strong><em>= ${esc(dLast.anchor)} の公表値 ${pct2(dLast.anchorY)} + b ${dLast.b.toFixed(2)} × 全銘柄の約定金額ベースの変化。下の「信用評価損益率」の欄に検証あり</em></article>` : ""}
-        <article><span>先を見ない検証(金曜の合計 → 公表値)</span><strong>${chk.mae === null ? "—" : chk.mae.toFixed(3)}<small>倍</small></strong><em>平均の誤差(${chk.weeks.length}週)。前回の公表値のままなら ${chk.maeNaive === null ? "—" : chk.maeNaive.toFixed(2)}倍</em></article>
+        <article class="is-forecast"><span>予測の当たり方(予測 → 実データ)</span><strong>${fcMae === null ? "—" : fcMae.toFixed(2)}<small>倍</small></strong><em>平均の誤差(直近 ${graded0.length}営業日)。実データが 95% の幅に入った割合 ${fcCover === null ? "—" : `${Math.round(fcCover * 100)}%`}</em></article>
+        <article class="is-actual"><span>先回り集計の精度(金曜の合計 → 公表値)</span><strong>${chk.mae === null ? "—" : chk.mae.toFixed(3)}<small>倍</small></strong><em>平均の差(${chk.weeks.length}週)。同じ金曜の残高の集計なので一致するのが当然で、予測の精度ではありません。前回の公表値のままなら ${chk.maeNaive === null ? "—" : chk.maeNaive.toFixed(2)}倍</em></article>
       </div>
       <div id="rmChart" class="mini-chart"></div>
-      <div class="row-head"><h3>毎日の推定</h3><small>各日の値は、その日より前に出ていた公表値だけを使っています(先を見ない)。網掛けの行は公表値のある金曜申込分</small></div>
-      <div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>信用倍率の推定</th><th>公表値</th><th>評価損益率の推定</th><th>公表値</th><th>元にした公表値</th><th>b</th></tr></thead><tbody>
-        ${dEst.slice().reverse().slice(0, 30).map((r) => `<tr class="${r.plOff !== null || r.ratioOff !== null ? "sel" : ""}"><th>${esc(r.date)}</th><td>${r.ratio.toFixed(2)}倍</td><td>${r.ratioOff === null ? "" : `${r.ratioOff.toFixed(2)}倍`}</td><td class="${cls(r.pl)}">${r.pl === null ? "—" : pct2(r.pl)}</td><td>${r.plOff === null ? "" : pct2(r.plOff)}</td><td>${r.anchor ? `${esc(r.anchor)}(${pct2(r.anchorY)})` : "—"}</td><td>${r.b === null ? "—" : r.b.toFixed(2)}</td></tr>`).join("")}
+      <div class="row-head"><h3>信用倍率: 予測と実データ</h3><small><b class="tag-fc">予測</b> = その日の引けの時点で公表済みのデータだけで出した値(全銘柄の合計は翌営業日の16時に出るので、ふつうは2営業日前の分が元)。<b class="tag-act">実データ</b> = その日の全銘柄の合計(翌営業日の16時に判明。金曜の分は公表値の前日に分かる先回り集計)。網掛けは公表値のある金曜申込分</small></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th class="col-fc">予測</th><th class="col-fc">元にした実データ</th><th class="col-fc">95% の幅</th><th class="col-act">実データ(先回り集計)</th><th class="col-act">判明</th><th>公表値</th><th>予測 − 実データ</th></tr></thead><tbody>
+        ${fcRows.slice().reverse().slice(0, 32).map((r) => `<tr class="${r.off !== null ? "sel" : ""}"><th>${esc(r.date)}${r.date === todayD ? " <small>今日</small>" : ""}</th><td class="col-fc">${r.fc === null ? "—" : `${r.fc.toFixed(2)}倍`}</td><td class="col-fc"><small>${r.base ? `${esc(r.base)}(${r.gap}営業日前)` : "—"}</small></td><td class="col-fc"><small>${r.lo === null ? "—" : `${r.lo.toFixed(2)}〜${r.hi.toFixed(2)}`}</small></td><td class="col-act">${r.actual === null ? '<span class="muted">未判明</span>' : `${r.actual.toFixed(2)}倍`}</td><td class="col-act"><small>${esc(r.actualAt || "")}</small></td><td>${r.off === null ? "" : `${r.off.toFixed(2)}倍<small>${esc(r.offAt || "")}</small>`}</td><td>${r.fc !== null && r.actual !== null ? `${r.fc - r.actual >= 0 ? "+" : ""}${(r.fc - r.actual).toFixed(2)}` : ""}</td></tr>`).join("")}
+      </tbody></table></div>
+      <div class="row-head"><h3>信用評価損益率: 毎日の推定</h3><small>各日の値は、その日より前の申込日の公表値と、その日の全銘柄の約定金額ベースの変化から(全銘柄の合計と同じく翌営業日に分かる)</small></div>
+      <div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>評価損益率の推定</th><th>公表値</th><th>元にした公表値</th><th>b</th></tr></thead><tbody>
+        ${dEst.filter((r) => r.pl !== null || r.plOff !== null).reverse().slice(0, 30).map((r) => `<tr class="${r.plOff !== null ? "sel" : ""}"><th>${esc(r.date)}</th><td class="${cls(r.pl)}">${r.pl === null ? "—" : pct2(r.pl)}</td><td>${r.plOff === null ? "" : pct2(r.plOff)}</td><td>${r.anchor ? `${esc(r.anchor)}(${pct2(r.anchorY)})` : "—"}</td><td>${r.b === null ? "—" : r.b.toFixed(2)}</td></tr>`).join("")}
       </tbody></table></div>
       <details class="mm-detail"><summary>信用倍率の週ごとの答え合わせ</summary>
       <div class="table-wrap"><table class="grid"><thead><tr><th>申込日</th><th>公表値</th><th>推定(金曜の合計 × 比)</th><th>誤差</th><th>買残の誤差</th><th>売残の誤差</th><th>前回の公表値</th></tr></thead><tbody>
@@ -1887,9 +1905,9 @@
     const pf = { type: "custom", formatter: (v) => `${v.toFixed(2)}倍`, minMove: 0.01 };
     const ln = (o) => RM.chart.addSeries(LW.LineSeries, { priceFormat: pf, lastValueVisible: false, priceLineVisible: false, ...o });
     const from = SRMargin.cleanDaily(cm.daily)[0]?.date || "";
-    ln({ color: alpha(css("--muted") || "#888888", 0.8), lineWidth: 1, title: "全銘柄の合計(毎日)" }).setData(SRMargin.cleanDaily(cm.daily).map((r) => ({ time: r.date, value: r.buy_sh / r.sell_sh })));
+    ln({ color: alpha(css("--muted") || "#888888", 0.9), lineWidth: 2, title: "実データ(先回り集計)", lastValueVisible: true }).setData(fcRows.filter((r) => r.actual !== null).map((r) => ({ time: r.date, value: r.actual })));
+    ln({ color: "#ffb300", lineWidth: 1, lineStyle: LW.LineStyle.Dashed, pointMarkersVisible: true, title: "予測(引け時点)", lastValueVisible: true }).setData(fcRows.filter((r) => r.fc !== null && r.date >= from).map((r) => ({ time: r.date, value: r.fc })));
     ln({ color: css("--credit-buy") || "#ef5350", lineWidth: 2, pointMarkersVisible: true, title: "公表値", lastValueVisible: true }).setData(off.filter((r) => r.date >= from).map((r) => ({ time: r.date, value: r.buy / r.sell })));
-    if (nc) ln({ color: "#ffb300", lineWidth: 2, pointMarkersVisible: true, title: "推定", lastValueVisible: true }).setData([{ time: nc.target, value: nc.ratio }]);
     RM.chart.timeScale().fitContent();
   }
   // ---------- 信用評価損益率(買い方・2市場)の推定モデル ----------

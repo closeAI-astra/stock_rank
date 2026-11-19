@@ -556,3 +556,12 @@ table.ex-mat td:hover { outline: 2px solid var(--accent); }
 /* 古い参考の表をたたんでおく枠 */
 .panel-details { margin: 8px 0 14px; }
 .panel-details > summary { cursor: pointer; color: var(--muted, #888); font-size: 13px; padding: 6px 0; }
+
+/* 信用倍率: 予測(その日の引け時点の情報だけ)と実データ(全銘柄の合計 = 先回り集計)を見分ける色 */
+.cards article.is-forecast { border-left: 3px solid #ffb300; }
+.cards article.is-actual { border-left: 3px solid var(--muted, #8a8f98); }
+.tag-fc, .tag-act { display: inline-block; padding: 0 6px; border-radius: 4px; font-weight: 600; }
+.tag-fc { background: rgba(255, 179, 0, 0.18); color: #b07800; }
+.tag-act { background: rgba(138, 143, 152, 0.18); }
+.grid td.col-fc, .grid th.col-fc { background: rgba(255, 179, 0, 0.07); }
+.grid td.col-act, .grid th.col-act { background: rgba(138, 143, 152, 0.08); }

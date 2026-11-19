@@ -87,3 +87,25 @@ assert.ok(d1109.b > 0.7 && d1109.b < 0.9, String(d1109.b));
 const d0925 = de.find((r) => r.date === "2026-09-25"); assert.strictEqual(d0925.pl, null); // それより前の公表値が無い
 assert.ok(Math.abs(de.find((r) => r.date === "2026-10-30").ratio - 3654854000 / 349230000) < 0.005);
 console.log("marginmodel (毎日) ok");
+
+// ---- 予測(引け時点の情報だけ)と実データの分離(2026-11-19) ----
+{
+  const fr = M.ratioForecasts(fx.daily, fx.official, ["2026-11-10"]);
+  const row = (d) => fr.find((r) => r.date === d);
+  // 10/23(金)の引けの時点では、10/22 の合計(10/23 16時公表)はまだ出ていないので、元は 10/21
+  assert.strictEqual(row("2026-10-23").base, "2026-10-21");
+  // 祝日(11/3)をはさむ: 11/4 の予測の元は 10/30(10/30 の分は 11/2 16時、11/2 の分は 11/4 16時 = 引けの後)
+  assert.strictEqual(row("2026-11-04").base, "2026-10-30");
+  // 金曜の実データは公表値とほぼ同じ(先回り集計)。判明は月曜、公表は火曜
+  assert.ok(Math.abs(row("2026-10-30").actual - row("2026-10-30").off) < 0.01);
+  assert.strictEqual(row("2026-10-30").actualAt, "2026-11-02");
+  assert.strictEqual(row("2026-10-30").offAt, "2026-11-04");
+  // 先を見ない: 予測の日の引けより後に出るデータを壊しても、その日の予測は変わらない
+  const D = "2026-10-29"; const a = row(D);
+  const broken = fx.daily.map((r) => (r.date >= "2026-10-28" ? { ...r, buy_sh: r.buy_sh * 2 } : r));
+  const offB = fx.official.map((o) => (o.date >= "2026-10-23" ? { ...o, buy: o.buy * 3 } : o));
+  assert.strictEqual(M.ratioForecasts(broken, offB, []).find((r) => r.date === D).fc, a.fc);
+  // 未来の日は予測だけ(実データなし)
+  assert.strictEqual(row("2026-11-10").actual, null); assert.ok(row("2026-11-10").fc > 0);
+  console.log("ratioForecasts ok");
+}

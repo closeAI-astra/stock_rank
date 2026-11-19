@@ -191,11 +191,61 @@
       return { date: d, ratio: (r.buy_sh * fb) / (r.sell_sh * fs), ratioOff: offR ? offR.buy / offR.sell : null, pl, plOff: offT ? offT.y : null, anchor: anchor?.date || null, anchorY: anchor ? anchor.y : null, b, x: xm.get(d) ?? null };
     });
   }
+  // ---------- 信用倍率の「予測」と「実データ(先回り集計)」を分ける(2026-11-19) ----------
+  // 公表のタイミング(東証の引けは 15:30):
+  //   ・全銘柄の合計(JPX 銘柄別信用取引残高)… 申込日 X の分は翌営業日の 16時ごろ → X の翌営業日の引けではまだ分からない
+  //   ・公表値(JPX 信用取引現在高・金曜申込分)… 2営業日後(火曜)の 16時半ごろ
+  // 予測 = その日 D の引けの時点で公表済みのデータだけを使った値(いまは「最後に分かっている合計のまま」+ 過去の同じ日数の動きからの 95% の幅)。
+  // 実データ = その日 D の全銘柄の合計 × 比(D の翌営業日 16時に分かる。金曜の分は月曜 = 公表値の前日に分かる「先回り集計」)。予測ではない
+  // days: 予測を出す日(過去の営業日に加えて、今日・今週の金曜など)。営業日の並びは daily の日付(集計ミスの日も含む)、その先は平日で数える
+  // isBiz: 休場日を知っている営業日の判定(app の SRCal.makeBizCal)。無ければ平日を営業日とする
+  function ratioForecasts(daily, official, days, isBiz) {
+    const all = (daily || []).filter((r) => r && r.date).map((r) => r.date).sort();
+    const dd = cleanDaily(daily); const dm = new Map(dd.map((r) => [r.date, r]));
+    const off = (official || []).filter((o) => fin(o.buy) && fin(o.sell) && o.sell > 0).sort((a, b) => (a.date < b.date ? -1 : 1));
+    const offBy = new Map(off.map((o) => [o.date, o]));
+    const nextBd = (d, n = 1) => {
+      let cur = d;
+      for (let k = 0; k < n; k++) {
+        const i = all.findIndex((x) => x > cur);
+        if (i >= 0) { cur = all[i]; continue; }
+        const biz = (ms) => (isBiz ? isBiz(new Date(ms).toISOString().slice(0, 10)) : ![0, 6].includes(new Date(ms).getUTCDay()));
+        let x = t(cur) + DAY; while (!biz(x)) x += DAY; cur = new Date(x).toISOString().slice(0, 10);
+      }
+      return cur;
+    };
+    const bdBetween = (a, b) => { let n = 0, cur = a; while (cur < b && n < 400) { cur = nextBd(cur); n++; } return n; };
+    const pubDaily = new Map(all.map((d) => [d, nextBd(d)]));     // 合計が分かる日(16時ごろ)
+    const pubOff = (d) => nextBd(d, 2);                             // 公表値が出る日(16時半ごろ)
+    const lr = dd.map((r) => ({ d: r.date, v: Math.log(r.buy_sh / r.sell_sh) }));
+    // 比(公表値 ÷ 合計)。cutoff の日の引けまでに公表値と合計の両方が出ていた週だけの中央値
+    const factors = (known) => {
+      const w = off.filter((o) => dm.has(o.date) && known(o.date));
+      return { fb: median(w.map((o) => o.buy / dm.get(o.date).buy_sh)) ?? 1, fs: median(w.map((o) => o.sell / dm.get(o.date).sell_sh)) ?? 1, n: w.length };
+    };
+    // 幅: 予測の時点までに分かっていた合計の、k 営業日の対数の変化(外れ値に強い MAD × 1.4826)
+    const sdOf = (k, upto) => { const s = lr.filter((x) => x.d <= upto); const ch = []; for (let i = k; i < s.length; i++) ch.push(s[i].v - s[i - k].v); if (ch.length < 5) return null; const md = median(ch); return 1.4826 * median(ch.map((x) => Math.abs(x - md))); };
+    const forecast = (D) => {
+      const atClose = (x) => (pubDaily.get(x) || nextBd(x)) < D; // 16時の公表は引けの後なので、D より前の日に公表済みのものだけ
+      const base = dd.filter((r) => r.date < D && atClose(r.date)).at(-1); if (!base) return null;
+      const f = factors((F) => pubOff(F) < D && atClose(F));
+      const k = bdBetween(base.date, D); const sd = sdOf(k, base.date); const half = sd === null ? null : 1.96 * sd;
+      const v = (base.buy_sh * f.fb) / (base.sell_sh * f.fs);
+      return { fc: v, lo: half === null ? null : v * Math.exp(-half), hi: half === null ? null : v * Math.exp(half), base: base.date, gap: k };
+    };
+    const set = [...new Set([...dd.map((r) => r.date), ...(days || [])])].sort();
+    return set.map((D) => {
+      const r = dm.get(D); const o = offBy.get(D);
+      const fa = factors((F) => F < D); // 実データの比は、その週より前の週の公表値から(先を見ない。dailyEstimates と同じ)
+      const actual = r ? (r.buy_sh * fa.fb) / (r.sell_sh * fa.fs) : null;
+      return { date: D, ...(forecast(D) || { fc: null, lo: null, hi: null, base: null, gap: null }), actual, actualAt: r ? pubDaily.get(D) : null, off: o ? o.buy / o.sell : null, offAt: o ? pubOff(D) : null, offDue: pubOff(D) };
+    });
+  }
   // 全銘柄の約定金額ベースの評価損益率(つないだ系列)を、日付 → {x} で引けるようにする
   function linkSeries(daily) { const m = new Map(cleanDaily(daily).filter((r) => fin(r.pl_buy_link)).map((r) => [r.date, { x: r.pl_buy_link, n: r.n_priced }])); return (d) => m.get(d) || null; }
   // 指数(TOPIX など)の対数 × 100。その日以前で7日以内の終値
   function logIndex(rows) { const r = (rows || []).filter((x) => fin(x.c) && x.c > 0).sort((a, b) => (a.d < b.d ? -1 : 1)); return (d) => { const j = lastIdx(r, "d", d); if (j < 0 || t(d) - t(r[j].d) > 7 * DAY) return null; return { x: 100 * Math.log(r[j].c) }; }; }
 
-  const api = { parseIrbank, mergeTargets, prepRows, simulate, build, xAt, fit, fitX, score, nowcast, nowcastX, cleanDaily, ratioCheck, ratioNowcast, gradeNowcasts, dailyEstimates, linkSeries, logIndex, monday, friday };
+  const api = { parseIrbank, mergeTargets, prepRows, simulate, build, xAt, fit, fitX, score, nowcast, nowcastX, cleanDaily, ratioCheck, ratioNowcast, ratioForecasts, gradeNowcasts, dailyEstimates, linkSeries, logIndex, monday, friday };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.SRMargin = api;
 })(typeof window !== "undefined" ? window : globalThis);
