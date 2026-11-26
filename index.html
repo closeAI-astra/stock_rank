@@ -10,7 +10,7 @@
   <meta name="referrer" content="no-referrer">
   <title>Stock Rank</title>
   <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
-  <link rel="stylesheet" href="assets/css/app.css?v=f57f7aa30c">
+  <link rel="stylesheet" href="assets/css/app.css?v=ae1bc8d151">
   <script src="assets/js/preload.js?v=06519fa1e5"></script>
 </head>
 <body>
@@ -28,6 +28,7 @@
         <a class="nav-item" href="#chart" data-nav="chart"><span class="nav-icon">⟋</span><span>チャート</span></a>
         <a class="nav-item" href="#rank" data-nav="rank"><span class="nav-icon">☷</span><span>ランキング・信用</span></a>
         <a class="nav-item" href="#explore" data-nav="explore"><span class="nav-icon">⁘</span><span>相関を探す</span></a>
+        <a class="nav-item" href="#indicators" data-nav="indicators"><span class="nav-icon">∿</span><span>市場の指標</span></a>
         <a class="nav-item" href="#macro" data-nav="macro"><span class="nav-icon">◇</span><span>マクロ・貿易</span></a>
         <a class="nav-item" href="#schedule" data-nav="schedule"><span class="nav-icon">▤</span><span>スケジュール</span></a>
         <a class="nav-item" href="#archive" data-nav="archive"><span class="nav-icon">▦</span><span>保存データ</span></a>
@@ -143,6 +144,12 @@
       <div id="schedBody"><p class="muted pad">読み込み中…</p></div>
     </section>
 
+    <!-- 市場の指標 -->
+    <section class="view page" data-view="indicators">
+      <div class="page-head"><p class="eyebrow">VOLATILITY · RATIOS · SUPPLY</p><h1>市場の指標</h1><p>日経VI・VIX・NT倍率をはじめ、ボラティリティ指数・期間構造・株価指数・金利・為替・JPX の需給・市況を、1つのチャートに重ねて見比べるページ。</p></div>
+      <div id="indBody"></div>
+    </section>
+
     <section class="view page" data-view="macro">
       <div class="page-head"><p class="eyebrow">MACRO · TRADE</p><h1>マクロ・貿易統計</h1><p id="macroSub">stockAI(Future Sight)が集めた貿易統計・経済指標・市況。</p></div>
       <div class="tabs" id="macroTabs" role="tablist"></div>
@@ -231,6 +238,6 @@
   <script src="assets/js/explore.js?v=e48161fdac"></script>
   <script src="assets/js/calendar.js?v=b45de4fd75"></script>
   <script src="assets/js/drawings.js?v=853bb759a2"></script>
-  <script src="assets/js/app.js?v=4bf3524ecb"></script>
+  <script src="assets/js/app.js?v=496036f439"></script>
 </body>
 </html>

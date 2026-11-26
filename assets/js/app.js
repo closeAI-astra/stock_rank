@@ -61,7 +61,7 @@
   const csvLine = (cells) => cells.map((c) => { const s = String(c ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(",");
 
   // ---------- 状態 ----------
-  const DEFAULTS = { interval: "1d", type: "candle", ind: ["ma5", "ma25", "ma75", "vol", "earnings"], panes: ["credit", "pnl"], hiddenInd: [], sideOpen: true, bottomOpen: true, bottomH: 300, magnet: false, hideDrawings: false, scale: 0, bottomTab: "credit", creditMethod: "fifo6m", watch: "all", watchSort: "rank", macroTab: "trade" };
+  const DEFAULTS = { interval: "1d", type: "candle", ind: ["ma5", "ma25", "ma75", "vol", "earnings"], panes: ["credit", "pnl"], hiddenInd: [], sideOpen: true, bottomOpen: true, bottomH: 300, magnet: false, hideDrawings: false, scale: 0, bottomTab: "credit", creditMethod: "fifo6m", watch: "all", watchSort: "rank", macroTab: "trade", miSel: ["NKVI", "VIX", "NT"], miRange: "1y", miMode: "group" };
   const S = {
     dash: null, preds: [], byCode: new Map(), catalog: {}, code: null, view: "chart",
     set: { ...DEFAULTS, ...LS.get("stockrank-settings", {}) },
@@ -126,7 +126,7 @@
   function route() {
     const h = location.hash.replace(/^#/, "");
     const [view, arg] = h.split("/");
-    const v = ["chart", "rank", "explore", "macro", "schedule", "archive", "settings", "about"].includes(view) ? view : "chart";
+    const v = ["chart", "rank", "explore", "indicators", "macro", "schedule", "archive", "settings", "about"].includes(view) ? view : "chart";
     S.view = v;
     $$(".view").forEach((el) => el.classList.toggle("active", el.dataset.view === v));
     $$("[data-nav]").forEach((a) => a.classList.toggle("active", a.dataset.nav === v));
@@ -139,6 +139,7 @@
     }
     if (v === "rank") renderRank();
     if (v === "explore") renderExplore();
+    if (v === "indicators") renderIndicators();
     if (v === "macro") renderMacro();
     if (v === "schedule") renderSchedule();
     if (v === "archive") renderArchive();
@@ -2456,7 +2457,7 @@
     if (!tabs.dataset.built) { tabs.dataset.built = "1"; tabs.addEventListener("click", (e) => { const b = e.target.closest("[data-mtab]"); if (!b) return; S.set.macroTab = b.dataset.mtab; saveSettings(); MX.sel = null; renderMacro(); }); }
     tabs.innerHTML = MACRO_TABS.map(([k, l]) => `<button type="button" data-mtab="${k}" class="${S.set.macroTab === k ? "active" : ""}">${l}</button>`).join("");
     const body = $("#macroBody");
-    if (!S.macro) { body.innerHTML = '<p class="muted pad">読み込み中…</p>'; [S.macro, S.econ] = await Promise.all([SRData.fs("macro").catch(() => ({ error: true })), SRData.fs("econ").catch(() => ({ error: true }))]); }
+    if (!S.macro || !S.econ) { body.innerHTML = '<p class="muted pad">読み込み中…</p>'; [S.macro, S.econ] = await Promise.all([S.macro || SRData.fs("macro").catch(() => ({ error: true })), S.econ || SRData.fs("econ").catch(() => ({ error: true }))]); }
     macroChart?.remove(); macroChart = null;
     const fn = { trade: mxTrade, export: mxExport, econ: mxEcon, markets: mxMarkets }[S.set.macroTab] || mxTrade;
     try { body.innerHTML = fn(); } catch (e) { console.error(e); body.innerHTML = `<p class="pad">表示できませんでした: ${esc(e.message)}</p>`; }
@@ -2547,6 +2548,209 @@
     const all = groups.flatMap((g) => g.items); const sel = all.find((it) => it.sym === MX.mk);
     const card = (it) => `<button type="button" class="ec-card ${it.available ? "" : "off"} ${MX.mk === it.sym ? "sel" : ""}" data-mk="${esc(it.sym)}"><header><b>${esc(it.name || it.sym)}</b><small>${esc(it.sym)}${it.unit ? ` · ${esc(it.unit)}` : ""}</small></header>${it.available ? `<div class="ec-val"><strong>${fmt(it.last, it.isRatio ? 3 : Math.abs(num(it.last)) >= 1000 ? 0 : 2)}</strong><span>${esc(it.date || "")}</span></div><div class="chgs"><span>1日 ${pctCell(it.chg1)}</span><span>20日 ${pctCell(it.chg20)}</span><span>1年 ${pctCell(it.chg250, 0)}</span></div>${spark(it.spark, 220, 34)}` : '<p class="muted">未取得</p>'}</button>`;
     return `${sel ? `<section class="panel" id="mxDetail"><div class="row-head"><h3>${esc(sel.name)}(${esc(sel.sym)})</h3><small>5年の週足</small><button type="button" class="btn" data-mk="${esc(sel.sym)}">閉じる</button></div><div id="mxDetailChart" class="mini-chart" data-kind="line" data-series='${esc(JSON.stringify([{ name: sel.name, points: sel.weekly || [] }]))}'></div></section>` : ""}${groups.map((g) => `<div class="row-head"><h3>${esc(g.label)}</h3></div><div class="ec-grid">${g.items.map(card).join("")}</div>`).join("")}<p class="foot">出典: stockAI の価格取得(Yahoo Finance 等)。カードを押すと5年の週足。</p>`;
+  }
+
+  // =====================================================================
+  // 市場の指標(日経VI・VIX・NT倍率など、市場全体の指標を1か所で重ねて見る)
+  // =====================================================================
+  // データはすべて読み込み済みのものから作る(取得はしない):
+  //   index-pages(2020年〜の日足)… 日経平均・TOPIX・S&P500・NASDAQ・VIX・米10年債・ドル円 → NT倍率もここから計算
+  //   market.options.volIndices(直近約2年の日足)… 日経VI・VIX の期間構造・VVIX・SKEW・MOVE など
+  //   inst/market(stock_rank が JPX から取得)… 空売り比率・裁定残・東証全体の信用倍率
+  //   macro.markets / commodities(5年の週足)… 上に無い市況(ドル指数・SOX・商品など)
+  let miChart = null; let miSeries = [];
+  const MI_PALETTE = ["#e0584f", "#2962ff", "#ff9800", "#26a69a", "#ab47bc", "#8d6e63", "#00acc1", "#7cb342", "#ec407a", "#5c6bc0", "#ffca28", "#78909c"];
+  const MI_RANGES = [["3m", "3か月", 92], ["6m", "6か月", 183], ["1y", "1年", 366], ["2y", "2年", 731], ["5y", "5年", 1827], ["all", "全期間", 0]];
+  const MI_MODES = [["group", "単位ごとに段を分ける"], ["each", "1つずつ段を分ける"], ["z", "z値で1段に重ねる"]];
+  const MI_PRESETS = [
+    ["日経VI・VIX・NT倍率", ["NKVI", "VIX", "NT"]],
+    ["日経VI と日経平均", ["NKVI", "N225"]],
+    ["VIX の期間構造", ["VIX9D", "VIX", "VIX3M", "VIX6M", "VIXTS"]],
+    ["日米の不安の差", ["NKVI", "VIX", "NKVI_VIX"]],
+    ["NT倍率と米金利・SOX", ["NT", "TNX", "W:^SOX"]],
+    ["需給(JPX)", ["SHORT", "ARB", "MARGIN", "N225"]],
+  ];
+  // 段を共有する単位(group モード)。ここに無い系列は1つで1段
+  const MI_SCALE = { NKVI: "vol", VIX: "vol", VIX9D: "vol", VIX3M: "vol", VIX6M: "vol", VXN: "vol", OVX: "vol", GVZ: "vol", VVIX: "volhi", SKEW: "volhi", MOVE: "volhi", VIXTS: "ratio1", VIX9DR: "ratio1" };
+  const MI_SCALE_LABEL = { vol: "ボラティリティ指数(年率%)", volhi: "VVIX・SKEW・MOVE", ratio1: "VIX の期間構造の比" };
+
+  function miClean(points) {
+    const m = new Map();
+    (points || []).forEach(([d, v]) => { const t = normDate(d); const x = num(v); if (t && x !== null) m.set(t, x); });
+    return [...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+  }
+  // a の各日付 d に、b の「d より前の最新の値」(strict=true)か「d 以前の最新の値」を対応させる
+  function miAsof(a, b, strict) {
+    const out = []; let j = -1;
+    for (const [d, v] of a) {
+      while (j + 1 < b.length && (strict ? b[j + 1][0] < d : b[j + 1][0] <= d)) j++;
+      if (j >= 0) out.push([d, v, b[j][1], b[j][0]]);
+    }
+    return out;
+  }
+  function miCatalog() {
+    if (S.miCat) return S.miCat;
+    const out = []; const have = new Set();
+    const add = (o) => { const pts = miClean(o.points); if (pts.length < 2 || have.has(o.id)) return; have.add(o.id); out.push({ freq: "日足", chg: "abs", digits: 2, tz: "JP", ret: "log", ...o, points: pts }); };
+    const idx = (id) => (S.idxById.get(id)?.points || []).map((a) => [a[0], a[4]]);
+    const vol = new Map((S.market?.options?.volIndices || []).filter((v) => v.available).map((v) => [v.symbol, v.series || []]));
+    const macroItems = [...(S.macro?.markets || []).map((g) => ({ label: g.label, items: g.items })), ...(S.macro?.commodities?.groups || []).map((g) => ({ label: g.label, items: g.items }))];
+    const weeklyOf = (sym) => macroItems.flatMap((g) => g.items).find((it) => it.sym === sym && it.available)?.weekly || [];
+    const G_JV = "ボラティリティ(日本)", G_UV = "ボラティリティ(米国)", G_R = "比率・差", G_I = "株価指数", G_F = "金利・為替", G_S = "需給(JPX)";
+
+    // 日経VI: 日足(約2年)。無ければ週足
+    const nkvi = vol.get("NKVI") || vol.get("^JNIV");
+    add({ id: "NKVI", name: "日経平均VI", group: G_JV, src: "stockAI(日経公式)", points: nkvi?.length ? nkvi : weeklyOf("NKVI"), freq: nkvi?.length ? "日足" : "週足", desc: "日経平均オプションの価格から逆算した、今後1か月の日経平均の予想変動率(年率%)。日本版の VIX。20前後が平常、30を超えると不安が強い。日経VI ÷ √250 ≒ 1日に織り込む値幅(%)" });
+    // VIX: 2020年からの日足(指数ページ)を優先
+    const vixPts = idx("VIX").length ? idx("VIX") : vol.get("^VIX") || [];
+    add({ id: "VIX", name: "VIX", group: G_UV, src: "Yahoo Finance(^VIX)", points: vixPts, tz: "US", desc: "S&P500 オプションから逆算した、今後30日の予想変動率(年率%)。恐怖指数。20 以下は楽観、30 超はリスクオフの目安" });
+    [["VIX9D", "^VIX9D", "VIX 9日", "9日先までの予想変動率。VIX より高いと目先(決算・指標・イベント)への不安が強い"], ["VIX3M", "^VIX3M", "VIX 3か月", "3か月先までの予想変動率。ふだんは VIX より高い(期間が長いほど高い=順イールド)"], ["VIX6M", "^VIX6M", "VIX 6か月", "6か月先までの予想変動率"],
+      ["VXN", "^VXN", "VXN(NASDAQ100)", "NASDAQ100 の VIX。ハイテク株の不安"], ["VVIX", "^VVIX", "VVIX", "VIX そのものの予想変動率。100 超は VIX の急変を警戒している状態"], ["SKEW", "^SKEW", "SKEW", "大暴落(テール)への保険の値段。高いほど急落に備えたプット買いが多い。VIX が低いのに SKEW が高いのは『静かな警戒』"],
+      ["MOVE", "^MOVE", "MOVE(米国債)", "米国債の予想変動率(債券の VIX)。金利の不安"], ["OVX", "^OVX", "OVX(原油)", "原油の予想変動率"], ["GVZ", "^GVZ", "GVZ(金)", "金の予想変動率"]]
+      .forEach(([id, sym, name, desc]) => add({ id, name, group: G_UV, src: `Yahoo Finance(${sym})`, points: vol.get(sym) || [], tz: "US", desc }));
+
+    // NT倍率 = 日経平均 ÷ TOPIX(同じ日の終値どうし)
+    const n225 = miClean(idx("N225")), tpx = miClean(idx("TPX")); const tMap = new Map(tpx);
+    add({ id: "NT", name: "NT倍率", group: G_R, src: "日経平均 ÷ TOPIX(終値)", points: n225.filter(([d]) => tMap.get(d) > 0).map(([d, v]) => [d, v / tMap.get(d)]), digits: 3,
+      desc: "日経平均 ÷ TOPIX。上がるほど値がさ株(半導体・ファストリ・SBG など日経平均への寄与が大きい銘柄)主導、下がるほど銀行・内需など TOPIX の大型株主導" });
+    const vixC = miClean(vixPts), v3 = miClean(vol.get("^VIX3M")), v9 = miClean(vol.get("^VIX9D"));
+    const ratio = (a, b) => { const m = new Map(b); return a.filter(([d]) => m.get(d) > 0).map(([d, v]) => [d, v / m.get(d)]); };
+    add({ id: "VIXTS", name: "VIX ÷ VIX3M", group: G_R, src: "計算", points: ratio(vixC, v3), digits: 3, tz: "US", desc: "1 を超える(短期の方が高い=逆イールド)と、目先のストレスが強い状態。1 を下回って戻ると落ち着いた合図になりやすい" });
+    add({ id: "VIX9DR", name: "VIX9D ÷ VIX", group: G_R, src: "計算", points: ratio(v9, vixC), digits: 3, tz: "US", desc: "1 を超えると、ここ1〜2週間のイベントへの不安が強い" });
+    // 日経VI − VIX: 日本の D の日経VI と、その時点で分かっている米国の前の営業日の VIX
+    const nk = miClean(nkvi || []);
+    add({ id: "NKVI_VIX", name: "日経VI − VIX", group: G_R, src: "計算(VIX は日本の前の営業日までの米国の終値)", points: miAsof(nk, vixC, true).map(([d, a, b]) => [d, a - b]), ret: "diff",
+      desc: "プラスが大きいほど、米国より日本の不安(日経平均の予想変動)が大きい。ふだんは日経VI の方が数ポイント高い" });
+
+    [["N225", "日経平均"], ["TPX", "TOPIX"]].forEach(([id, name]) => add({ id, name, group: G_I, src: "指数ページ", points: idx(id), chg: "pct", digits: 0 }));
+    [["GSPC", "S&P 500"], ["IXIC", "NASDAQ総合"]].forEach(([id, name]) => add({ id, name, group: G_I, src: "指数ページ", points: idx(id), chg: "pct", digits: 0, tz: "US" }));
+    add({ id: "TNX", name: "米10年国債利回り", group: G_F, src: "指数ページ(^TNX)", points: idx("TNX"), digits: 3, tz: "US", ret: "diff", unit: "%" });
+    add({ id: "USDJPY", name: "ドル円", group: G_F, src: "指数ページ(JPY=X)", points: idx("USDJPY"), chg: "pct", tz: "FX" });
+
+    const im = S.instMarket;
+    if (im) {
+      add({ id: "SHORT", name: "空売り比率", group: G_S, src: "JPX 空売り集計(売買代金ベース)", points: (im.shortRatio || []).map((r) => [r.date, num(r.ratio) === null ? null : r.ratio * 100]), digits: 1, ret: "diff", unit: "%", desc: "東証の売買代金に占める空売りの割合。40% 超が続くと売られすぎ(買い戻し待ち)の目安" });
+      add({ id: "ARB", name: "裁定買い残", group: G_S, src: `JPX 裁定取引(${im.arbitrageUnit || ""})`, points: (im.arbitrage || []).map((r) => [r.date, r.buy]), freq: "週次", digits: 0, chg: "pct", desc: "積み上がるほど、解消売り(先物主導の下げ)の余地が大きい" });
+      add({ id: "MARGIN", name: "信用倍率(東証全体)", group: G_S, src: "JPX 信用取引現在高", points: (im.margin || []).map((r) => [r.date, num(r.ratio) ?? (num(r.buy) && num(r.sell) ? r.buy / r.sell : null)]), freq: "週次", digits: 2, desc: "信用買残 ÷ 信用売残(株数)。高いほど将来の売り(買い方の返済)が多い" });
+    }
+    // 上に無い市況は 5年の週足で
+    const dailySym = new Set(["^VIX9D", "^VIX", "^VIX3M", "^VIX6M", "^VVIX", "^SKEW", "^MOVE", "^VXN", "^OVX", "^GVZ", "NKVI", "^JNIV", "^TNX", "JPY=X", "^N225", "^TPX", "^GSPC", "^IXIC", "VIX/VIX3M", "VIX9D/VIX", "NT"]);
+    macroItems.forEach((g) => g.items.filter((it) => it.available && !dailySym.has(it.sym)).forEach((it) => add({ id: `W:${it.sym}`, name: it.name || it.sym, group: `${g.label}(週足)`, src: `${it.sym}${it.unit ? ` · ${it.unit}` : ""}`, points: it.weekly || [], freq: "週足", chg: it.isRatio ? "abs" : "pct", digits: it.isRatio ? 3 : Math.abs(num(it.last)) >= 1000 ? 0 : 2 })));
+
+    out.forEach((s, i) => { s.color = MI_PALETTE[i % MI_PALETTE.length]; s.stats = miStats(s); });
+    // 主役の3つの色は固定
+    const fixed = { NKVI: "#e0584f", VIX: "#2962ff", NT: "#ff9800" }; out.forEach((s) => { if (fixed[s.id]) s.color = fixed[s.id]; });
+    S.miCat = out; S.miById = new Map(out.map((s) => [s.id, s]));
+    return out;
+  }
+  function miStats(s) {
+    const v = s.points.map((p) => p[1]); const last = v.at(-1); const n = v.length;
+    const ch = (k) => { if (n <= k) return null; const b = v[n - 1 - k]; return s.chg === "pct" ? (b ? last / b - 1 : null) : last - b; };
+    const y = v.slice(s.freq === "日足" ? -250 : -52);
+    const rank = (arr) => arr.length ? arr.filter((x) => x < last).length / arr.length : null;
+    return { last, date: s.points.at(-1)[0], c1: ch(1), c5: ch(5), c20: ch(20), avg1y: y.reduce((p, x) => p + x, 0) / y.length, pos1y: rank(y), posAll: rank(v), hi1y: Math.max(...y), lo1y: Math.min(...y), first: s.points[0][0], n };
+  }
+  const miVal = (s, v) => (num(v) === null ? "—" : `${fmt(v, s.digits)}${s.unit === "%" ? "%" : ""}`);
+  const miChg = (s, v) => { if (num(v) === null) return "—"; if (s.chg === "pct") return pctCell(v); const d = s.digits >= 2 ? 2 : s.digits; return `<span class="${cls(v)}">${v >= 0 ? "+" : ""}${v.toFixed(d)}</span>`; };
+  const miPos = (p) => (num(p) === null ? "—" : `${Math.round(p * 100)}%`);
+
+  async function renderIndicators() {
+    const body = $("#indBody");
+    const need = [];
+    if (!S.market) need.push(SRData.fs("market").catch(() => ({})).then((x) => { S.market = x; }));
+    if (!S.macro) need.push(SRData.fs("macro").catch(() => ({ error: true })).then((x) => { S.macro = x; }));
+    if (S.instMarket === undefined) need.push(SRData.own("inst/market").catch(() => null).then((x) => { if (S.instMarket === undefined) S.instMarket = x; }));
+    if (need.length) { body.innerHTML = '<p class="muted pad">読み込み中…</p>'; await Promise.all(need); S.miCat = null; }
+    if (S.view !== "indicators") return;
+    const cat = miCatalog();
+    if (!cat.length) { body.innerHTML = empty("指標のデータがありません。"); return; }
+    S.set.miSel = (S.set.miSel || []).filter((id) => S.miById.has(id));
+    const sel = S.set.miSel; const isOn = (id) => sel.includes(id);
+    const card = (id) => { const s = S.miById.get(id); if (!s) return ""; const st = s.stats;
+      return `<button type="button" class="ec-card ${isOn(id) ? "sel" : ""}" data-mi="${esc(id)}" title="${esc(s.desc || "")}"><header><b><i class="mi-dot" style="background:${s.color}"></i>${esc(s.name)}</b><small>${esc(st.date)} · ${esc(s.freq)}</small></header><div class="ec-val"><strong>${miVal(s, st.last)}</strong><span>1年の中の位置 ${miPos(st.pos1y)}</span></div><div class="chgs"><span>1日 ${miChg(s, st.c1)}</span><span>5日 ${miChg(s, st.c5)}</span><span>20日 ${miChg(s, st.c20)}</span></div><div class="chgs"><span>1年平均 ${miVal(s, st.avg1y)}</span><span>1年の幅 ${miVal(s, st.lo1y)}〜${miVal(s, st.hi1y)}</span></div>${spark(s.points.slice(s.freq === "日足" ? -120 : -26).map((p) => p[1]), 220, 34, s.color)}</button>`; };
+    const cards = `<div class="ec-grid mi-cards">${["NKVI", "VIX", "NT", "NKVI_VIX", "VIXTS"].map(card).join("")}</div>`;
+    const groups = [...new Set(cat.map((s) => s.group))];
+    const picker = `<div class="mi-picker">${groups.map((g) => `<div class="mi-group"><span>${esc(g)}</span>${cat.filter((s) => s.group === g).map((s) => `<button type="button" class="chip-btn ${isOn(s.id) ? "" : "off"}" data-mi="${esc(s.id)}" title="${esc(s.desc || s.src)}"><i style="background:${s.color}"></i>${esc(s.name)}</button>`).join("")}</div>`).join("")}</div>`;
+    const controls = `<div class="mi-controls">${seg(MI_RANGES.map(([k, l]) => [k, l]), S.set.miRange, "mi-range")}${seg(MI_MODES, S.set.miMode, "mi-mode")}<div class="seg">${MI_PRESETS.map(([l], i) => `<button type="button" data-mi-preset="${i}">${esc(l)}</button>`).join("")}<button type="button" data-mi-preset="clear">選択を外す</button></div></div>`;
+    const chartBox = sel.length ? `<div id="miLegend" class="mi-legend"></div><div id="miChart" class="mi-chart"></div>` : empty("下の一覧か上のカードで指標を選ぶと、ここに重ねて表示します。");
+    const notes = sel.map((id) => S.miById.get(id)).filter((s) => s?.desc).map((s) => `<li><b style="color:${s.color}">${esc(s.name)}</b>: ${esc(s.desc)}</li>`).join("");
+    body.innerHTML = `${cards}
+      <section class="panel"><div class="row-head"><h3>チャート</h3><small>${sel.length}系列 · 線の上にカーソルを置くとその日の値。日付は各市場の現地の日付(米国の D の終値は日本の D+1 の朝に分かる)</small></div>${controls}${chartBox}${notes ? `<ul class="mi-notes">${notes}</ul>` : ""}${picker}</section>
+      ${miCorrHtml()}
+      ${miTableHtml(cat)}
+      <p class="foot">出典: stockAI(Future Sight)の指数ページ・ボラティリティ指数・市況(Yahoo Finance、日経平均VI は日経公式)、stock_rank が JPX から取得した需給。日足のボラティリティ指数は直近約2年分(VIX・株価指数・金利・為替は2020年〜)。</p>`;
+    bindIndicators(body);
+    if (sel.length) drawMiChart();
+  }
+  function miRangeStart() {
+    const days = MI_RANGES.find(([k]) => k === S.set.miRange)?.[2] ?? 366; if (!days) return "0000-00-00";
+    const last = S.set.miSel.map((id) => S.miById.get(id)?.stats.date).filter(Boolean).sort().at(-1) || new Date().toISOString().slice(0, 10);
+    return new Date(Date.parse(`${last}T00:00:00Z`) - days * 864e5).toISOString().slice(0, 10);
+  }
+  function drawMiChart() {
+    miChart?.remove(); miChart = null; miSeries = [];
+    const el = $("#miChart"); if (!el) return;
+    const from = miRangeStart(); const mode = S.set.miMode;
+    const list = S.set.miSel.map((id) => S.miById.get(id)).filter(Boolean).map((s) => ({ s, pts: s.points.filter(([d]) => d >= from) })).filter((x) => x.pts.length);
+    // 段の割り当て
+    const paneKey = (s) => (mode === "z" ? "z" : mode === "each" ? s.id : MI_SCALE[s.id] || s.id);
+    const keys = [...new Set(list.map((x) => paneKey(x.s)))];
+    const paneH = keys.length <= 2 ? 240 : keys.length <= 4 ? 170 : 130;
+    el.style.height = `${keys.length * paneH + 30}px`;
+    miChart = LW.createChart(el, { autoSize: true, ...chartTheme(), ...PAGE_CHART, localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, timeScale: { ...chartTheme().timeScale, rightOffset: 4 } });
+    list.forEach(({ s, pts }) => {
+      let data = pts.map(([d, v]) => ({ time: d, value: v }));
+      if (mode === "z") { const v = pts.map((p) => p[1]); const m = v.reduce((a, b) => a + b, 0) / v.length; const sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / Math.max(1, v.length - 1)) || 1; data = pts.map(([d, x]) => ({ time: d, value: (x - m) / sd })); }
+      const digits = mode === "z" ? 2 : Math.min(3, s.digits);
+      const sr = miChart.addSeries(LW.LineSeries, { color: s.color, lineWidth: 2, title: s.name, priceLineVisible: false, lastValueVisible: true, lineType: s.freq === "日足" ? LW.LineType.Simple : LW.LineType.WithSteps, priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits } }, keys.indexOf(paneKey(s)));
+      sr.setData(data);
+      const ref = mode === "z" ? 0 : s.id === "VIXTS" || s.id === "VIX9DR" ? 1 : s.id === "NKVI_VIX" ? 0 : s.id === "SHORT" ? 40 : null;
+      if (ref !== null) sr.createPriceLine({ price: ref, color: css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: false, title: "" });
+      miSeries.push({ s, sr, data });
+    });
+    miChart.panes().forEach((p) => p.setHeight(paneH));
+    miChart.timeScale().fitContent();
+    const legend = (param) => {
+      const t = param?.time;
+      $("#miLegend").innerHTML = miSeries.map(({ s, sr, data }) => {
+        const pt = t ? param.seriesData.get(sr) : data.at(-1); const raw = t ? s.points.find(([d]) => d === t)?.[1] : s.points.at(-1)[1];
+        const shown = pt?.value === undefined ? "—" : mode === "z" ? `z ${pt.value.toFixed(2)}${raw !== undefined ? ` (${miVal(s, raw)})` : ""}` : miVal(s, pt.value);
+        return `<span><i style="background:${s.color}"></i>${esc(s.name)} <b>${shown}</b></span>`;
+      }).join("") + `<small>${t ? esc(String(t)) : "最新"}${mode === "z" ? " · z値 = (値 − 期間の平均) ÷ 標準偏差" : ""}</small>`;
+    };
+    legend(null); miChart.subscribeCrosshairMove((p) => legend(p.time ? p : null));
+  }
+  // 選んだ日足の系列どうしの日々の変化の相関。日本の D と米国の系列は「D より前の米国の最新の値」を対応させる
+  function miCorrHtml() {
+    const from = miRangeStart();
+    const list = S.set.miSel.map((id) => S.miById.get(id)).filter((s) => s && s.freq === "日足");
+    const weekly = S.set.miSel.map((id) => S.miById.get(id)).filter((s) => s && s.freq !== "日足");
+    if (list.length < 2) return "";
+    const chg = (s) => { const p = s.points.filter(([d]) => d >= from); const out = []; for (let i = 1; i < p.length; i++) { const a = p[i - 1][1], b = p[i][1]; const x = s.ret === "log" ? (a > 0 && b > 0 ? Math.log(b / a) : null) : b - a; if (x !== null && Number.isFinite(x)) out.push([p[i][0], x]); } return out; };
+    const C = list.map(chg);
+    const corr = (i, j) => {
+      const a = list[i], b = list[j]; let pairs;
+      const us = (s) => s.tz === "US";
+      if (us(a) === us(b)) { const m = new Map(C[j]); pairs = C[i].filter(([d]) => m.has(d)).map(([d, x]) => [x, m.get(d)]); }
+      else { const [jp, u, flip] = us(a) ? [C[j], C[i], true] : [C[i], C[j], false]; const used = new Set(); pairs = miAsof(jp, u, true).filter(([, , , ud]) => (used.has(ud) ? false : used.add(ud))).map(([, x, y]) => (flip ? [y, x] : [x, y])); }
+      const n = pairs.length; if (n < 20) return { r: null, n };
+      const mx = pairs.reduce((p, q) => p + q[0], 0) / n, my = pairs.reduce((p, q) => p + q[1], 0) / n;
+      let sxy = 0, sxx = 0, syy = 0; pairs.forEach(([x, y]) => { sxy += (x - mx) * (y - my); sxx += (x - mx) ** 2; syy += (y - my) ** 2; });
+      return { r: sxx && syy ? sxy / Math.sqrt(sxx * syy) : null, n };
+    };
+    const cell = (i, j) => { if (i === j) return "<td>—</td>"; const { r, n } = corr(i, j); if (r === null) return `<td title="${n}組">—</td>`; return `<td title="${n}組" style="background:${alpha(r >= 0 ? "#2962ff" : "#e0584f", Math.min(0.55, Math.abs(r) * 0.6))}">${r.toFixed(2)}</td>`; };
+    return `<section class="panel"><div class="row-head"><h3>日々の変化の相関</h3><small>チャートと同じ期間 · 水準は対数の変化、金利・差・比率(%)は差分 · 日本の日付 D には、その時点で分かっている米国の前の営業日の値を対応(同じ市場どうしは同じ日)· セルにカーソルで組の数</small></div><div class="table-wrap"><table class="grid"><thead><tr><th></th>${list.map((s) => `<th>${esc(s.name)}</th>`).join("")}</tr></thead><tbody>${list.map((s, i) => `<tr><th>${esc(s.name)}</th>${list.map((_, j) => cell(i, j)).join("")}</tr>`).join("")}</tbody></table></div>${weekly.length ? `<p class="foot">週足・週次の系列(${weekly.map((s) => esc(s.name)).join("・")})は日付が日足と揃わないので相関から除いています。</p>` : ""}</section>`;
+  }
+  function miTableHtml(cat) {
+    const rows = cat.map((s) => { const st = s.stats; return `<tr class="${S.set.miSel.includes(s.id) ? "sel" : ""}" data-mi="${esc(s.id)}" title="${esc(s.desc || "")}"><th><i class="mi-dot" style="background:${s.color}"></i>${esc(s.name)}<small>${esc(s.group)}</small></th><td>${miVal(s, st.last)}</td><td><small>${esc(st.date)}</small></td><td>${miChg(s, st.c1)}</td><td>${miChg(s, st.c5)}</td><td>${miChg(s, st.c20)}</td><td>${miVal(s, st.avg1y)}</td><td>${miPos(st.pos1y)}</td><td>${miPos(st.posAll)}</td><td><small>${esc(st.first)}〜 · ${esc(s.freq)}</small></td><td><small>${esc(s.src)}</small></td></tr>`; }).join("");
+    return `<section class="panel"><div class="row-head"><h3>指標の一覧(${cat.length})</h3><small>行を押すとチャートに追加・削除 · 変化は株価指数・為替・週足の市況は %、それ以外は差(ポイント)· 週足は 1本=1週 · 「位置」はその期間の中で今の値より低かった日の割合</small></div><div class="table-wrap tall"><table class="grid mi-table"><thead><tr><th>指標</th><th>最新</th><th>日付</th><th>1本前比</th><th>5本前比</th><th>20本前比</th><th>1年平均</th><th>1年の中の位置</th><th>全期間の位置</th><th>期間</th><th>出典</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
+  }
+  function bindIndicators(body) {
+    const toggle = (id) => { const a = S.set.miSel || []; S.set.miSel = a.includes(id) ? a.filter((x) => x !== id) : [...a, id]; saveSettings(); renderIndicators(); };
+    $$("[data-mi]", body).forEach((el) => el.addEventListener("click", () => toggle(el.dataset.mi)));
+    $$("[data-mi-range]", body).forEach((el) => el.addEventListener("click", () => { S.set.miRange = el.dataset.miRange; saveSettings(); renderIndicators(); }));
+    $$("[data-mi-mode]", body).forEach((el) => el.addEventListener("click", () => { S.set.miMode = el.dataset.miMode; saveSettings(); renderIndicators(); }));
+    $$("[data-mi-preset]", body).forEach((el) => el.addEventListener("click", () => { const p = el.dataset.miPreset; S.set.miSel = p === "clear" ? [] : MI_PRESETS[Number(p)][1].filter((id) => S.miById.has(id)); saveSettings(); renderIndicators(); }));
   }
 
   // =====================================================================
