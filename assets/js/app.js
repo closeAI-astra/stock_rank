@@ -61,7 +61,7 @@
   const csvLine = (cells) => cells.map((c) => { const s = String(c ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(",");
 
   // ---------- 状態 ----------
-  const DEFAULTS = { interval: "1d", type: "candle", ind: ["ma5", "ma25", "ma75", "vol", "earnings"], panes: ["credit", "pnl"], hiddenInd: [], sideOpen: true, bottomOpen: true, bottomH: 300, magnet: false, hideDrawings: false, scale: 0, bottomTab: "credit", creditMethod: "fifo6m", watch: "all", watchSort: "rank", macroTab: "trade", miLayout: [{ id: "NKVI", pane: 0 }, { id: "VIX", pane: 0 }, { id: "NT", pane: 1 }], miRange: "1Y", miScale: 0, miIv: "1d" };
+  const DEFAULTS = { interval: "1d", type: "candle", ind: ["ma5", "ma25", "ma75", "vol", "earnings"], panes: ["credit", "pnl", "profit"], profitPaneAdded: true, hiddenInd: [], sideOpen: true, bottomOpen: true, bottomH: 300, magnet: false, hideDrawings: false, scale: 0, bottomTab: "credit", creditMethod: "fifo6m", watch: "all", watchSort: "rank", macroTab: "trade", miLayout: [{ id: "NKVI", pane: 0 }, { id: "VIX", pane: 0 }, { id: "NT", pane: 1 }], miRange: "1Y", miScale: 0, miIv: "1d" };
   const S = {
     dash: null, preds: [], byCode: new Map(), catalog: {}, code: null, view: "chart",
     set: { ...DEFAULTS, ...LS.get("stockrank-settings", {}) },
@@ -115,6 +115,7 @@
     SRData.fs("evidence").then((x) => { S.evidence = x; if (S.set.bottomTab === "profile") renderBottom(); }).catch(() => { S.evidence = null; });
     $("#asOf").textContent = S.dash.asOf ? `${String(S.dash.asOf).slice(0, 16).replace("T", " ")} 時点のデータ` : "";
     document.body.classList.remove("loading");
+    if (!S.set.profitPaneAdded) { if (!S.set.panes.includes("profit")) S.set.panes = [...S.set.panes, "profit"]; S.set.profitPaneAdded = true; saveSettings(); }
     buildToolbar(); bindChartUi(); bindLegend(); bindModals(); bindTrades(); bindSearch(); bindWatch(); bindSidebar(); renderWatch();
     window.addEventListener("hashchange", route);
     route();
@@ -323,6 +324,16 @@
     const first = cur.daily[0]?.d || "9999";
     return [...cur.weekly.filter((r) => r.d < first), ...cur.daily];
   }
+  // 含み益保有者割合(推定)。日足(その前は週足)と発行済株式数から取得コストの分布を追う(analytics.js の profitHolders)
+  function ensureProfit(cur) {
+    if (cur.profit !== undefined) return cur.profit;
+    if (cur.isIndex) return (cur.profit = null);
+    const rows = priceRowsForCredit(cur); const shares = num(cur.detail?.irbank?.security?.issued_shares);
+    const res = SRAna.profitHolders(rows, shares || 0);
+    const warmDate = rows[res.warmEnd]?.d || "9999";
+    cur.profit = { byDate: new Map(rows.map((r, i) => [r.d, res.ratio[i]])), warmDate, last: res.ratio.at(-1), lastDate: rows.at(-1)?.d, shares: shares || null };
+    return cur.profit;
+  }
   function computeEst(cur) {
     const all = mergeCredit(cur.detail?.credit, cur.archives);
     cur.errata = all.filter((r) => CREDIT_ERRATA[r.date]);
@@ -433,7 +444,7 @@
   const lineOpts = (color, extra = {}) => ({ color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false, ...extra });
 
   const IND_MENU = [["ma5", "移動平均 5"], ["ma25", "移動平均 25"], ["ma75", "移動平均 75"], ["ma200", "移動平均 200"], ["bb", "ボリンジャーバンド 20, 2σ"], ["ichimoku", "一目均衡表"], ["vol", "出来高"], ["avgcost", "信用買い方の推定平均取得単価"], ["sellcost", "信用売り方の推定平均売り単価"], ["vprofile", "価格帯別出来高(表示範囲)"], ["avwap_earn", "アンカード VWAP(直近の決算発表から)"], ["avwap_hi", "アンカード VWAP(52週高値から)"], ["avwap_lo", "アンカード VWAP(52週安値から)"], ["perband", "PER バンド(実績 EPS × 過去の PER 分布)"], ["pbrband", "PBR バンド(BPS × 過去の PBR 分布)"], ["earnings", "決算発表日(「決」印)"]];
-  const PANE_MENU = [["credit", "信用残(買残・売残)"], ["ratio", "信用倍率"], ["pnl", "推定 信用評価損益率"], ["amount", "信用残の金額"], ["rsi", "RSI 14"], ["macd", "MACD 12, 26, 9"], ["stoch", "ストキャスティクス 14, 3"]];
+  const PANE_MENU = [["credit", "信用残(買残・売残)"], ["ratio", "信用倍率"], ["pnl", "推定 信用評価損益率"], ["amount", "信用残の金額"], ["profit", "含み益保有者割合(推定)"], ["rsi", "RSI 14"], ["macd", "MACD 12, 26, 9"], ["stoch", "ストキャスティクス 14, 3"]];
   const IND_COLORS = { ma5: "#2962ff", ma25: "#ff9800", ma75: "#ab47bc", ma200: "#26a69a", bb: "#2962ff", ichimoku: "#e91e63", vol: "#26a69a", avgcost: "#ef5350", sellcost: "#42a5f5", vprofile: "#9e9e9e", avwap_earn: "#f7a600", avwap_hi: "#ec407a", avwap_lo: "#26c6da", perband: "#8d6e63", pbrband: "#78909c", earnings: "#f7a600" };
   // 指数では使えない指標(個別銘柄のデータが要る)
   const STOCK_ONLY_IND = new Set(["avgcost", "sellcost", "perband", "pbrband", "earnings", "avwap_earn"]);
@@ -783,7 +794,7 @@
     const pctFmt = { type: "custom", formatter: (v) => `${(v).toFixed(1)}%`, minMove: 0.1 };
     for (const k of S.set.panes) {
       if (["credit", "ratio", "pnl", "amount"].includes(k) && !cb.length) continue;
-      if (cur.isIndex && ["pnl", "amount"].includes(k)) continue;
+      if (cur.isIndex && ["pnl", "amount", "profit"].includes(k)) continue;
       pane++; paneKinds.push(k);
       if (k === "rsi") { const s = addPaneLine(pane, bars.map((r, i) => { const v = SRInd.rsi(closes)[i]; return Number.isFinite(v) ? { time: r.time, value: v } : { time: r.time }; }), "#7e57c2", { title: "RSI" }); [30, 70].forEach((lv) => s.createPriceLine({ price: lv, color: css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: false })); }
       if (k === "macd") {
@@ -805,6 +816,13 @@
         addPaneLine(pane, cb.filter((x) => num(x.r.sellPnl) !== null).map((x) => ({ time: x.time, value: x.r.sellPnl * 100 })), css("--credit-sell"), { title: "売り方", priceFormat: pctFmt });
         s.createPriceLine({ price: 0, color: css("--tv-grid2"), lineWidth: 1, axisLabelVisible: false });
         [-20, -10].forEach((lv) => s.createPriceLine({ price: lv, color: alpha(css("--down"), 0.35), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: true, title: `${lv}%` }));
+      }
+      if (k === "profit") {
+        const pr = ensureProfit(cur);
+        if (pr) {
+          const s = addPaneLine(pane, bars.map((r) => { const v = pr.byDate.get(r.end) ?? pr.byDate.get(r.time); return num(v) === null ? { time: r.time } : { time: r.time, value: v * 100, color: r.end < pr.warmDate ? alpha("#26a69a", 0.3) : undefined }; }), "#26a69a", { title: "含み益", priceFormat: pctFmt });
+          [50, 80, 20].forEach((lv) => s.createPriceLine({ price: lv, color: lv === 50 ? css("--tv-grid2") : alpha("#26a69a", 0.4), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: lv !== 50, title: lv === 50 ? "" : `${lv}%` }));
+        }
       }
       if (k === "amount") {
         const okuFmt = { type: "custom", formatter: (v) => `${v.toFixed(Math.abs(v) >= 100 ? 0 : 1)}億`, minMove: 0.1 };
@@ -977,7 +995,8 @@
       <div class="sc-price"><strong>${fmtPrice(last.c ?? r.close)}</strong><span class="${cls(chg)}">${chg === null ? "" : `${chg >= 0 ? "+" : ""}${fmtPrice(chg)} (${pct(chg / prev.c, 2)})`}</span><small>${esc(last.d || "")}</small></div>
       <dl class="sc-kv"><div><dt>時価総額</dt><dd>${shares && last.c ? oku(shares * last.c) : "—"}</dd></div><div><dt>売買代金順位</dt><dd>${r.rank ? `#${r.rank}` : "—"}</dd></div>
       <div><dt>信用倍率</dt><dd>${cr ? `${fmt(cr.ratio, 2)}倍` : "—"}</dd></div><div><dt>買残 / 売残</dt><dd>${cr ? `${oku(cr.buyAmount)} / ${oku(cr.sellAmount)}` : "—"}</dd></div>
-      <div><dt>推定 買い方損益</dt><dd class="${cr ? cls(cr.buyPnl) : ""}">${cr ? pct(cr.buyPnl) : "—"}</dd></div><div><dt>推定 売り方損益</dt><dd class="${cr ? cls(cr.sellPnl) : ""}">${cr ? pct(cr.sellPnl) : "—"}</dd></div></dl>
+      <div><dt>推定 買い方損益</dt><dd class="${cr ? cls(cr.buyPnl) : ""}">${cr ? pct(cr.buyPnl) : "—"}</dd></div><div><dt>推定 売り方損益</dt><dd class="${cr ? cls(cr.sellPnl) : ""}">${cr ? pct(cr.sellPnl) : "—"}</dd></div>
+      <div title="日足と出来高から取得コストの分布を追い、今の株価より安く買った人の割合を推定(発行済株式数で回転を数える)"><dt>含み益保有者(推定)</dt><dd>${(() => { const pr = ensureProfit(cur); return pr && num(pr.last) !== null ? `${Math.round(pr.last * 100)}%` : "—"; })()}</dd></div><div><dt>&nbsp;</dt><dd><small>${(() => { const pr = ensureProfit(cur); return pr?.last >= 0.8 ? "大半が含み益(利食い売りが出やすい)" : pr?.last <= 0.2 ? "大半が含み損(戻り売りが出やすい)" : ""; })()}</small></dd></div></dl>
       <dl class="sc-kv"><div><dt>PER(会社予想)</dt><dd>${ratio(price, forecast?.eps) === null ? "—" : `${ratio(price, forecast.eps).toFixed(1)}倍`}</dd></div><div><dt>PBR(実績)</dt><dd>${ratio(price, bal?.bps) === null ? "—" : `${ratio(price, bal.bps).toFixed(2)}倍`}</dd></div>
       <div><dt>配当利回り</dt><dd>${dps !== null && price ? `${(dps / price * 100).toFixed(2)}%` : "—"}</dd></div><div><dt>1株配当</dt><dd>${dps === null ? "—" : `${fmtPrice(dps)}円${forecast ? "(予)" : ""}`}</dd></div>
       <div><dt>直近の通期</dt><dd>${lastA ? `${esc(lastA.period)} 営業益 ${mil(lastA.op)}` : "—"}</dd></div><div><dt>今期 会社予想 営業益</dt><dd>${forecast ? `${mil(forecast.op)}<small class="${cls(yoyOf(forecast.op, lastA?.op))}"> ${pct(yoyOf(forecast.op, lastA?.op))}</small>` : "—"}</dd></div>
@@ -1778,11 +1797,11 @@
     }
   }
   // 全銘柄合計(金額加重)の推定評価損益率の推移。週ごとに各銘柄の最後の観測を足し合わせる
-  function aggregateSeries(list) {
+  function aggregateSeries(list, withWarmup = false) {
     const wk = (d) => { const t = new Date(`${d}T00:00:00Z`); t.setUTCDate(t.getUTCDate() + ((5 - t.getUTCDay() + 7) % 7)); return t.toISOString().slice(0, 10); };
     const acc = new Map();
     list.forEach((x) => {
-      const per = new Map(); x.rows.forEach((r) => { if (!r.warmup) per.set(wk(r.date), r); });
+      const per = new Map(); x.rows.forEach((r) => { if (withWarmup || !r.warmup) per.set(wk(r.date), r); });
       per.forEach((r, w) => { const a = acc.get(w) || { bA: 0, bC: 0, sA: 0, sC: 0, n: 0, buy: 0, sell: 0, bAll: 0, mc: 0 }; if (r.buyAmount !== null && r.buyCost) { a.bA += r.buyAmount; a.bC += r.buyCost; } if (r.sellAmount !== null && r.sellCost) { a.sA += r.sellAmount; a.sC += r.sellCost; } if (x.shares && r.close && r.buyAmount !== null) { a.bAll += r.buyAmount; a.mc += x.shares * r.close; } a.n++; acc.set(w, a); });
     });
     const out = [...acc.entries()].sort().map(([w, a]) => ({ time: w, buyPnl: a.bC ? a.bA / a.bC - 1 : null, sellPnl: a.sC ? 1 - a.sA / a.sC : null, ratio: a.sA ? a.bA / a.sA : null, bA: a.bA, sA: a.sA, n: a.n, buyToMcap: a.mc ? a.bAll / a.mc : null }));
@@ -2037,11 +2056,18 @@
     const sumB = valid.reduce((s, x) => s + x.buyAmount, 0), sumS = valid.reduce((s, x) => s + (x.sellAmount || 0), 0);
     const lastA = agg.at(-1);
     box.innerHTML = `<div class="cards"><article><span>買残金額の合計</span><strong>${oku(sumB)}<small>円</small></strong><em>${valid.length}銘柄の最新申込日</em></article><article><span>売残金額の合計</span><strong>${oku(sumS)}<small>円</small></strong><em>金額ベースの信用倍率 ${sumS ? (sumB / sumS).toFixed(2) : "—"}倍</em></article><article><span>推定 買い方評価損益率(合計)</span><strong class="${cls(lastA?.buyPnl)}">${pct(lastA?.buyPnl)}</strong><em>${esc(lastA?.time || "")} 週 · 金額加重 · ${lastA?.n ?? 0}銘柄</em></article><article><span>推定 売り方評価損益率(合計)</span><strong class="${cls(lastA?.sellPnl)}">${pct(lastA?.sellPnl)}</strong><em>同上</em></article></div>
-      <section class="panel"><div class="row-head"><h3>対象銘柄合計の推定信用評価損益率と信用倍率(週次)</h3><small>買い方が −20% 前後まで悪化すると投げ(セリング・クライマックス)が出やすい、と一般に言われる水準。あくまで stockAI の対象銘柄だけの推定</small></div><div id="rankAggChart" class="mini-chart"></div></section>`;
+      <section class="panel"><div class="row-head"><h3>対象銘柄合計の推定信用評価損益率と信用倍率(週次)</h3><small>点線は各銘柄の履歴の最初の約半年(慣らし期間・参考)。個別銘柄の信用残は stockAI・株探・IRBANK のどれも 2025年7〜9月からしか無いため、それより前は出せません(市場全体の信用倍率は「市場の指標」で 2002年から)。買い方が −20% 前後まで悪化すると投げ(セリング・クライマックス)が出やすい、と一般に言われる水準。あくまで stockAI の対象銘柄だけの推定</small></div><div id="rankAggChart" class="mini-chart"></div></section>`;
     rankChart?.remove(); rankChart = null;
     if (agg.length < 2) return;
     rankChart = LW.createChart($("#rankAggChart"), { autoSize: true, ...chartTheme(), ...PAGE_CHART, localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, rightPriceScale: { ...chartTheme().rightPriceScale }, leftPriceScale: { visible: true, borderColor: css("--tv-border") } });
     const pf = { type: "custom", formatter: (v) => `${v.toFixed(1)}%`, minMove: 0.1 };
+    // 慣らし期間: 各銘柄の信用残の履歴の最初の約半年(取得コストを「最初の日の終値」と置いた影響が残る期間)も含めた合計を、
+    // 本番の線より前の部分だけ点線で出す。個別銘柄の信用残はどの取得元も 2025-07〜09 からしか無いので、これより前は出せない
+    const warm = aggregateSeries(list, true).filter((o) => o.time < agg[0].time);
+    if (warm.length) {
+      const wl = (color, key, title, scale) => { const x = rankChart.addSeries(LW.LineSeries, { color: alpha(color, 0.6), lineWidth: 1, lineStyle: LW.LineStyle.Dotted, priceFormat: key === "ratio" ? { type: "price", precision: 2, minMove: 0.01 } : pf, title, lastValueVisible: false, priceLineVisible: false, ...(scale ? { priceScaleId: scale } : {}) }); const first = agg[0]; x.setData([...warm, first].filter((o) => o[key] !== null).map((o) => ({ time: o.time, value: key === "ratio" ? o.ratio : o[key] * 100 }))); };
+      wl(css("--credit-buy") || "#ef5350", "buyPnl", ""); wl(css("--credit-sell") || "#2962ff", "sellPnl", ""); wl("#ffb300", "ratio", "", "left");
+    }
     const b = rankChart.addSeries(LW.LineSeries, { color: css("--credit-buy"), lineWidth: 2, priceFormat: pf, title: "買い方" }); b.setData(agg.filter((o) => o.buyPnl !== null).map((o) => ({ time: o.time, value: o.buyPnl * 100 })));
     const s = rankChart.addSeries(LW.LineSeries, { color: css("--credit-sell"), lineWidth: 2, priceFormat: pf, title: "売り方" }); s.setData(agg.filter((o) => o.sellPnl !== null).map((o) => ({ time: o.time, value: o.sellPnl * 100 })));
     [0, -10, -20].forEach((lv) => b.createPriceLine({ price: lv, color: lv ? alpha(css("--down"), 0.5) : css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: !!lv, title: lv ? `${lv}%` : "" }));

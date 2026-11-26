@@ -248,6 +248,39 @@
     return out;
   }
 
-  const api = { anchoredVwap, volumeProfile, progressTable, PROGRESS_KEYS, valuationBand, ols, sensitivity, retOver, rsScore, riskStats, breadthSeries, qualityTable, exDividendEvents };
+
+  // 含み益保有者割合(推定)。株の「取得コストの分布」を日足から追いかける(チップ分布・コスト分布と呼ばれる方法の簡易版):
+  //   1. 価格を対数で bins 個の帯に分ける
+  //   2. 毎日、回転率 t = 出来高 ÷ 発行済株式数 だけ古い保有が売られたとみなし、全ての帯を (1 − t) 倍に減らす
+  //   3. その日の出来高 t を、その日の安値〜高値の帯に均等に積む(その日に買った人のコスト)
+  //   4. 終値より下の帯にある分の割合 = 含み益の人の割合(終値の帯は半分と数える)
+  //   発行済株式数が無いときは、直近 window 本の出来高の合計を「全株数」の代わりにする(約 window 本で一回転)。
+  //   最初は「初日の終値で全員が買った」と置くので、回転の累計が 1 を超えるまで(warmEnd より前)は参考値。
+  function profitHolders(bars, shares, opts = {}) {
+    const n = bars.length; const ratio = new Array(n).fill(null); const bins = opts.bins || 240; const win = opts.window || 120;
+    let lo = Infinity, hi = -Infinity;
+    bars.forEach((r) => { const l = r.l > 0 ? r.l : r.c, h = r.h > 0 ? r.h : r.c; if (l > 0) lo = Math.min(lo, l); if (h > 0) hi = Math.max(hi, h); });
+    if (!(lo > 0) || !(hi > lo)) return { ratio, warmEnd: n };
+    const L0 = Math.log(lo), step = (Math.log(hi) - L0) / bins || 1;
+    const idx = (p) => Math.min(bins - 1, Math.max(0, Math.floor((Math.log(p) - L0) / step)));
+    const chips = new Float64Array(bins); let cum = 0, warmEnd = null, volSum = 0; const vq = [];
+    for (let i = 0; i < n; i++) {
+      const r = bars[i]; if (!(r.c > 0)) { ratio[i] = i ? ratio[i - 1] : null; continue; }
+      const v = r.v > 0 ? r.v : 0; vq.push(v); volSum += v; if (vq.length > win) volSum -= vq.shift();
+      let t = i === 0 ? 1 : shares > 0 ? v / shares : volSum > 0 ? v / volSum : 0;
+      t = Math.min(1, Math.max(0, t));
+      if (t > 0) {
+        for (let j = 0; j < bins; j++) chips[j] *= 1 - t;
+        const a = idx(r.l > 0 ? r.l : r.c), b = idx(r.h > 0 ? r.h : r.c); const w = t / (b - a + 1);
+        for (let j = a; j <= b; j++) chips[j] += w;
+      }
+      if (i > 0) cum += t; if (warmEnd === null && cum >= 1) warmEnd = i;
+      const k = idx(r.c); let below = 0, total = 0;
+      for (let j = 0; j < bins; j++) { total += chips[j]; if (j < k) below += chips[j]; else if (j === k) below += chips[j] / 2; }
+      ratio[i] = total > 0 ? below / total : null;
+    }
+    return { ratio, warmEnd: warmEnd ?? n };
+  }
+  const api = { anchoredVwap, volumeProfile, progressTable, PROGRESS_KEYS, valuationBand, ols, sensitivity, retOver, rsScore, riskStats, breadthSeries, qualityTable, exDividendEvents, profitHolders };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.SRAna = api;
 })(typeof window !== "undefined" ? window : globalThis);

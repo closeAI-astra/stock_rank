@@ -42,4 +42,15 @@ const est = C.estimateCredit(credit, daily, [], { method: "fifo6m" });
 assert.strictEqual(est.buyLots.length, 2);
 const sch = C.expirySchedule(est.buyLots, 12, "2026-02-06", "month", "2026-01-02");
 assert.strictEqual(sch.length, 1); assert.strictEqual(sch[0].key, "2026-08"); assert.strictEqual(sch[0].shares, 200);
+// 含み益保有者割合: 上がり続ければ 1 に近づき、下がり続ければ 0 に近づく。回転の累計が 1 を超えた日が warmEnd
+const mk = (f) => Array.from({ length: 300 }, (_, i) => { const c = f(i); return { d: `d${i}`, o: c, h: c * 1.005, l: c * 0.995, c, v: 1000 }; });
+const upP = A.profitHolders(mk((i) => 100 * Math.exp(i * 0.005)), 100000);
+assert.ok(upP.ratio.at(-1) > 0.9, `up ${upP.ratio.at(-1)}`);
+const dnP = A.profitHolders(mk((i) => 100 * Math.exp(-i * 0.005)), 100000);
+assert.ok(dnP.ratio.at(-1) < 0.1, `down ${dnP.ratio.at(-1)}`);
+assert.strictEqual(upP.warmEnd, 100); // 1000 ÷ 100000 = 1% / 日 → 100 日で一回転
+// 横ばいなら半分前後
+const flat = A.profitHolders(mk(() => 100), 100000); assert.ok(Math.abs(flat.ratio.at(-1) - 0.5) < 0.05);
+// 発行済株式数が無いときも動く(直近の出来高で一回転)
+assert.ok(A.profitHolders(mk((i) => 100 + i), 0).ratio.at(-1) > 0.9);
 console.log("analytics tests: ok");
