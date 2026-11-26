@@ -61,7 +61,7 @@
   const csvLine = (cells) => cells.map((c) => { const s = String(c ?? ""); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; }).join(",");
 
   // ---------- 状態 ----------
-  const DEFAULTS = { interval: "1d", type: "candle", ind: ["ma5", "ma25", "ma75", "vol", "earnings"], panes: ["credit", "pnl"], hiddenInd: [], sideOpen: true, bottomOpen: true, bottomH: 300, magnet: false, hideDrawings: false, scale: 0, bottomTab: "credit", creditMethod: "fifo6m", watch: "all", watchSort: "rank", macroTab: "trade", miSel: ["NKVI", "VIX", "NT"], miRange: "1y", miMode: "group" };
+  const DEFAULTS = { interval: "1d", type: "candle", ind: ["ma5", "ma25", "ma75", "vol", "earnings"], panes: ["credit", "pnl"], hiddenInd: [], sideOpen: true, bottomOpen: true, bottomH: 300, magnet: false, hideDrawings: false, scale: 0, bottomTab: "credit", creditMethod: "fifo6m", watch: "all", watchSort: "rank", macroTab: "trade", miLayout: [{ id: "NKVI", pane: 0 }, { id: "VIX", pane: 0 }, { id: "NT", pane: 1 }], miRange: "1Y", miScale: 0, miIv: "1d" };
   const S = {
     dash: null, preds: [], byCode: new Map(), catalog: {}, code: null, view: "chart",
     set: { ...DEFAULTS, ...LS.get("stockrank-settings", {}) },
@@ -2560,19 +2560,9 @@
   //   macro.markets / commodities(5年の週足)… 上に無い市況(ドル指数・SOX・商品など)
   let miChart = null; let miSeries = [];
   const MI_PALETTE = ["#e0584f", "#2962ff", "#ff9800", "#26a69a", "#ab47bc", "#8d6e63", "#00acc1", "#7cb342", "#ec407a", "#5c6bc0", "#ffca28", "#78909c"];
-  const MI_RANGES = [["3m", "3か月", 92], ["6m", "6か月", 183], ["1y", "1年", 366], ["2y", "2年", 731], ["5y", "5年", 1827], ["all", "全期間", 0]];
-  const MI_MODES = [["group", "単位ごとに段を分ける"], ["each", "1つずつ段を分ける"], ["z", "z値で1段に重ねる"]];
-  const MI_PRESETS = [
-    ["日経VI・VIX・NT倍率", ["NKVI", "VIX", "NT"]],
-    ["日経VI と日経平均", ["NKVI", "N225"]],
-    ["VIX の期間構造", ["VIX9D", "VIX", "VIX3M", "VIX6M", "VIXTS"]],
-    ["日米の不安の差", ["NKVI", "VIX", "NKVI_VIX"]],
-    ["NT倍率と米金利・SOX", ["NT", "TNX", "W:^SOX"]],
-    ["需給(JPX)", ["SHORT", "ARB", "MARGIN", "N225"]],
-  ];
-  // 段を共有する単位(group モード)。ここに無い系列は1つで1段
+  const MI_RANGES = [["1M", "1か月", 31], ["3M", "3か月", 92], ["6M", "6か月", 183], ["YTD", "年初来", 0], ["1Y", "1年", 366], ["2Y", "2年", 731], ["5Y", "5年", 1827], ["ALL", "全期間", 0]];
+  // 新しく足したとき同じ段に入れる単位。ここに無い系列は新しい段
   const MI_SCALE = { NKVI: "vol", VIX: "vol", VIX9D: "vol", VIX3M: "vol", VIX6M: "vol", VXN: "vol", OVX: "vol", GVZ: "vol", VVIX: "volhi", SKEW: "volhi", MOVE: "volhi", VIXTS: "ratio1", VIX9DR: "ratio1" };
-  const MI_SCALE_LABEL = { vol: "ボラティリティ指数(年率%)", volhi: "VVIX・SKEW・MOVE", ratio1: "VIX の期間構造の比" };
 
   function miClean(points) {
     const m = new Map();
@@ -2654,6 +2644,37 @@
   const miChg = (s, v) => { if (num(v) === null) return "—"; if (s.chg === "pct") return pctCell(v); const d = s.digits >= 2 ? 2 : s.digits; return `<span class="${cls(v)}">${v >= 0 ? "+" : ""}${v.toFixed(d)}</span>`; };
   const miPos = (p) => (num(p) === null ? "—" : `${Math.round(p * 100)}%`);
 
+  // ---------- 画面(TradingView 型: ＋で指標を足し、凡例から段の移動・非表示・削除) ----------
+  // 並びと段は S.set.miLayout = [{ id, pane, hidden }]。段の番号は 0 から詰める
+  function miLayout() {
+    let lay = Array.isArray(S.set.miLayout) ? S.set.miLayout : null;
+    if (!lay) { lay = []; (S.set.miSel || ["NKVI", "VIX", "NT"]).forEach((id) => lay.push({ id, pane: miPaneFor(id, lay) })); }
+    lay = lay.filter((x, i, a) => S.miById.has(x.id) && a.findIndex((y) => y.id === x.id) === i);
+    const order = [...new Set(lay.map((x) => x.pane).sort((a, b) => a - b))];
+    S.set.miLayout = lay.map((x) => ({ id: x.id, pane: order.indexOf(x.pane), ...(x.hidden ? { hidden: true } : {}) }));
+    delete S.set.miSel; delete S.set.miMode;
+    return S.set.miLayout;
+  }
+  // 新しく足す指標の段: 同じ単位(ボラ指数どうしなど)の段があればそこ、無ければ一番下に新しい段
+  function miPaneFor(id, lay) {
+    const g = MI_SCALE[id]; const same = g && lay.find((x) => MI_SCALE[x.id] === g);
+    return same ? same.pane : lay.length ? Math.max(...lay.map((x) => x.pane)) + 1 : 0;
+  }
+  function miToggle(id) {
+    const lay = miLayout();
+    S.set.miLayout = lay.some((x) => x.id === id) ? lay.filter((x) => x.id !== id) : [...lay, { id, pane: miPaneFor(id, lay) }];
+    miLayout(); saveSettings();
+  }
+  // 段の移動(TradingView の「上の段へ」「下の段へ」と同じ): 1人だけの段から上へ動くと上の段に重なり、
+  // 他と同居している段から下へ動くとすぐ下に新しい段ができる
+  function miMove(id, dir) {
+    const lay = miLayout(); const e = lay.find((x) => x.id === id); if (!e) return;
+    const alone = lay.filter((x) => x.pane === e.pane).length === 1; const last = Math.max(...lay.map((x) => x.pane));
+    if (dir < 0) { if (e.pane === 0 && alone) return; e.pane = alone ? e.pane - 1 : e.pane - 0.5; }
+    else { if (e.pane === last && alone) return; e.pane = alone ? e.pane + 1 : e.pane + 0.5; }
+    miLayout(); saveSettings();
+  }
+
   async function renderIndicators() {
     const body = $("#indBody");
     const need = [];
@@ -2664,67 +2685,120 @@
     if (S.view !== "indicators") return;
     const cat = miCatalog();
     if (!cat.length) { body.innerHTML = empty("指標のデータがありません。"); return; }
-    S.set.miSel = (S.set.miSel || []).filter((id) => S.miById.has(id));
-    const sel = S.set.miSel; const isOn = (id) => sel.includes(id);
+    const lay = miLayout(); const isOn = (id) => lay.some((x) => x.id === id);
+    if (!MI_RANGES.some(([k]) => k === S.set.miRange)) S.set.miRange = "1Y";
     const card = (id) => { const s = S.miById.get(id); if (!s) return ""; const st = s.stats;
       return `<button type="button" class="ec-card ${isOn(id) ? "sel" : ""}" data-mi="${esc(id)}" title="${esc(s.desc || "")}"><header><b><i class="mi-dot" style="background:${s.color}"></i>${esc(s.name)}</b><small>${esc(st.date)} · ${esc(s.freq)}</small></header><div class="ec-val"><strong>${miVal(s, st.last)}</strong><span>1年の中の位置 ${miPos(st.pos1y)}</span></div><div class="chgs"><span>1日 ${miChg(s, st.c1)}</span><span>5日 ${miChg(s, st.c5)}</span><span>20日 ${miChg(s, st.c20)}</span></div><div class="chgs"><span>1年平均 ${miVal(s, st.avg1y)}</span><span>1年の幅 ${miVal(s, st.lo1y)}〜${miVal(s, st.hi1y)}</span></div>${spark(s.points.slice(s.freq === "日足" ? -120 : -26).map((p) => p[1]), 220, 34, s.color)}</button>`; };
     const cards = `<div class="ec-grid mi-cards">${["NKVI", "VIX", "NT", "NKVI_VIX", "VIXTS"].map(card).join("")}</div>`;
-    const groups = [...new Set(cat.map((s) => s.group))];
-    const picker = `<div class="mi-picker">${groups.map((g) => `<div class="mi-group"><span>${esc(g)}</span>${cat.filter((s) => s.group === g).map((s) => `<button type="button" class="chip-btn ${isOn(s.id) ? "" : "off"}" data-mi="${esc(s.id)}" title="${esc(s.desc || s.src)}"><i style="background:${s.color}"></i>${esc(s.name)}</button>`).join("")}</div>`).join("")}</div>`;
-    const controls = `<div class="mi-controls">${seg(MI_RANGES.map(([k, l]) => [k, l]), S.set.miRange, "mi-range")}${seg(MI_MODES, S.set.miMode, "mi-mode")}<div class="seg">${MI_PRESETS.map(([l], i) => `<button type="button" data-mi-preset="${i}">${esc(l)}</button>`).join("")}<button type="button" data-mi-preset="clear">選択を外す</button></div></div>`;
-    const chartBox = sel.length ? `<div id="miLegend" class="mi-legend"></div><div id="miChart" class="mi-chart"></div>` : empty("下の一覧か上のカードで指標を選ぶと、ここに重ねて表示します。");
-    const notes = sel.map((id) => S.miById.get(id)).filter((s) => s?.desc).map((s) => `<li><b style="color:${s.color}">${esc(s.name)}</b>: ${esc(s.desc)}</li>`).join("");
-    body.innerHTML = `${cards}
-      <section class="panel"><div class="row-head"><h3>チャート</h3><small>${sel.length}系列 · 線の上にカーソルを置くとその日の値。日付は各市場の現地の日付(米国の D の終値は日本の D+1 の朝に分かる)</small></div>${controls}${chartBox}${notes ? `<ul class="mi-notes">${notes}</ul>` : ""}${picker}</section>
+    const tv = `<div class="mi-tv" id="miTv">
+      <div class="tv-top"><button type="button" class="tv-tbtn" id="miAddBtn" title="指標を追加(比較)"><b>＋</b> 指標を追加</button><span class="tv-sep"></span>
+        <div class="tv-group" role="group" aria-label="足">${[["1d", "日"], ["1w", "週"], ["1mo", "月"]].map(([k, l]) => `<button type="button" data-mi-iv="${k}" class="${(S.set.miIv || "1d") === k ? "active" : ""}" title="${l}足">${l}</button>`).join("")}</div>
+        <span class="tv-spacer"></span><button type="button" class="tv-ibtn" data-mi-act="fit" title="全体を表示">⤢</button><button type="button" class="tv-ibtn" data-mi-act="shot" title="画像で保存">📷</button><button type="button" class="tv-ibtn" data-mi-act="full" title="全画面">⛶</button></div>
+      <div class="tv-chartwrap mi-wrap" id="miWrap">${lay.length ? "" : `<div class="mi-empty"><button type="button" class="btn primary" id="miAddBtn2">＋ 指標を追加</button><small>上のカード・下の一覧の行を押しても追加できます</small></div>`}<div id="miChart" class="tv-chart"></div><div id="miLegends" class="mi-legends"></div></div>
+      <div class="tv-rangebar"><div class="tv-ranges" role="group" aria-label="期間">${MI_RANGES.map(([k, l]) => `<button type="button" data-mi-range="${k}" class="${S.set.miRange === k ? "active" : ""}">${l}</button>`).join("")}</div><span class="tv-spacer"></span><span class="mi-rtxt" id="miRangeTxt"></span><span class="tv-sep"></span>
+        <div class="tv-scales" role="group" aria-label="価格軸">${[[2, "%", "パーセント(表示している期間の最初の値からの変化)"], [1, "log", "対数"], [0, "auto", "自動(通常)"]].map(([k, l, t]) => `<button type="button" data-mi-scale="${k}" class="${(S.set.miScale || 0) === k ? "active" : ""}" title="${t}">${l}</button>`).join("")}</div></div>
+    </div>`;
+    const notes = lay.map((x) => S.miById.get(x.id)).filter((s) => s?.desc).map((s) => `<li><b style="color:${s.color}">${esc(s.name)}</b>: ${esc(s.desc)}</li>`).join("");
+    body.innerHTML = `${cards}${tv}${notes ? `<details class="mi-notes-box"><summary>表示中の指標の見方</summary><ul class="mi-notes">${notes}</ul></details>` : ""}
       ${miCorrHtml()}
       ${miTableHtml(cat)}
-      <p class="foot">出典: stockAI(Future Sight)の指数ページ・ボラティリティ指数・市況(Yahoo Finance、日経平均VI は日経公式)、stock_rank が JPX から取得した需給。日足のボラティリティ指数は直近約2年分(VIX・株価指数・金利・為替は2020年〜)。</p>`;
+      <p class="foot">出典: stockAI(Future Sight)の指数ページ・ボラティリティ指数・市況(Yahoo Finance、日経平均VI は日経公式)、stock_rank が JPX から取得した需給。日足のボラティリティ指数は直近約2年分(VIX・株価指数・金利・為替は2020年〜)。日付は各市場の現地の日付(米国の D の終値は日本の D+1 の朝に分かる)。</p>`;
     bindIndicators(body);
-    if (sel.length) drawMiChart();
+    drawMiChart();
   }
   function miRangeStart() {
-    const days = MI_RANGES.find(([k]) => k === S.set.miRange)?.[2] ?? 366; if (!days) return "0000-00-00";
-    const last = S.set.miSel.map((id) => S.miById.get(id)?.stats.date).filter(Boolean).sort().at(-1) || new Date().toISOString().slice(0, 10);
+    const k = S.set.miRange; const lay = S.set.miLayout || [];
+    const last = lay.map((x) => S.miById.get(x.id)?.stats.date).filter(Boolean).sort().at(-1) || new Date().toISOString().slice(0, 10);
+    if (k === "ALL") return "0000-00-00";
+    if (k === "YTD") return `${last.slice(0, 4)}-01-01`;
+    const days = MI_RANGES.find(([x]) => x === k)?.[2] ?? 366;
     return new Date(Date.parse(`${last}T00:00:00Z`) - days * 864e5).toISOString().slice(0, 10);
+  }
+  // 週足・月足: その週(月曜の日付)・その月(1日の日付)の最後の値
+  function miResample(points, iv) {
+    if (iv !== "1w" && iv !== "1mo") return points;
+    const key = (d) => { if (iv === "1mo") return `${d.slice(0, 7)}-01`; const t = new Date(`${d}T00:00:00Z`); const wd = (t.getUTCDay() + 6) % 7; return new Date(t - wd * 864e5).toISOString().slice(0, 10); };
+    const m = new Map(); points.forEach(([d, v]) => m.set(key(d), v));
+    return [...m.entries()];
   }
   function drawMiChart() {
     miChart?.remove(); miChart = null; miSeries = [];
-    const el = $("#miChart"); if (!el) return;
-    const from = miRangeStart(); const mode = S.set.miMode;
-    const list = S.set.miSel.map((id) => S.miById.get(id)).filter(Boolean).map((s) => ({ s, pts: s.points.filter(([d]) => d >= from) })).filter((x) => x.pts.length);
-    // 段の割り当て
-    const paneKey = (s) => (mode === "z" ? "z" : mode === "each" ? s.id : MI_SCALE[s.id] || s.id);
-    const keys = [...new Set(list.map((x) => paneKey(x.s)))];
-    const paneH = keys.length <= 2 ? 240 : keys.length <= 4 ? 170 : 130;
-    el.style.height = `${keys.length * paneH + 30}px`;
+    const wrap = $("#miWrap"), el = $("#miChart"); if (!wrap || !el) return;
+    const lay = S.set.miLayout || []; const nPanes = lay.length ? Math.max(...lay.map((x) => x.pane)) + 1 : 0;
+    const full = document.fullscreenElement === $("#miTv");
+    const paneH = full ? Math.max(120, Math.floor((window.innerHeight - 42 - 32 - 30) / Math.max(1, nPanes))) : nPanes <= 1 ? 420 : nPanes === 2 ? 260 : nPanes <= 4 ? 190 : 150;
+    wrap.style.height = full ? "" : `${Math.max(1, nPanes) * paneH + 30}px`;
+    $("#miLegends").innerHTML = "";
+    if (!nPanes) return;
+    const iv = S.set.miIv || "1d"; const mode = S.set.miScale || 0;
     miChart = LW.createChart(el, { autoSize: true, ...chartTheme(), ...PAGE_CHART, localization: { locale: "ja-JP", dateFormat: "yyyy/MM/dd" }, timeScale: { ...chartTheme().timeScale, rightOffset: 4 } });
-    list.forEach(({ s, pts }) => {
-      let data = pts.map(([d, v]) => ({ time: d, value: v }));
-      if (mode === "z") { const v = pts.map((p) => p[1]); const m = v.reduce((a, b) => a + b, 0) / v.length; const sd = Math.sqrt(v.reduce((a, b) => a + (b - m) ** 2, 0) / Math.max(1, v.length - 1)) || 1; data = pts.map(([d, x]) => ({ time: d, value: (x - m) / sd })); }
-      const digits = mode === "z" ? 2 : Math.min(3, s.digits);
-      const sr = miChart.addSeries(LW.LineSeries, { color: s.color, lineWidth: 2, title: s.name, priceLineVisible: false, lastValueVisible: true, lineType: s.freq === "日足" ? LW.LineType.Simple : LW.LineType.WithSteps, priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits } }, keys.indexOf(paneKey(s)));
-      sr.setData(data);
-      const ref = mode === "z" ? 0 : s.id === "VIXTS" || s.id === "VIX9DR" ? 1 : s.id === "NKVI_VIX" ? 0 : s.id === "SHORT" ? 40 : null;
-      if (ref !== null) sr.createPriceLine({ price: ref, color: css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: false, title: "" });
-      miSeries.push({ s, sr, data });
+    // 段 0 を先に作るため、段の順に足す
+    lay.slice().sort((a, b) => a.pane - b.pane).forEach((e) => {
+      const s = S.miById.get(e.id); if (!s) return;
+      const pts = miResample(s.points, iv);
+      const digits = Math.min(3, s.digits);
+      const sr = miChart.addSeries(LW.LineSeries, { color: s.color, lineWidth: 2, title: "", visible: !e.hidden, priceLineVisible: false, lastValueVisible: !e.hidden, lineType: s.freq === "日足" || iv !== "1d" ? LW.LineType.Simple : LW.LineType.WithSteps, priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits } }, e.pane);
+      sr.setData(pts.map(([d, v]) => ({ time: d, value: v })));
+      const ref = s.id === "VIXTS" || s.id === "VIX9DR" ? 1 : s.id === "NKVI_VIX" ? 0 : s.id === "SHORT" ? 40 : null;
+      if (ref !== null && mode === 0) sr.createPriceLine({ price: ref, color: css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: false, title: "" });
+      miSeries.push({ s, e, sr, pts });
     });
-    miChart.panes().forEach((p) => p.setHeight(paneH));
-    miChart.timeScale().fitContent();
-    const legend = (param) => {
-      const t = param?.time;
-      $("#miLegend").innerHTML = miSeries.map(({ s, sr, data }) => {
-        const pt = t ? param.seriesData.get(sr) : data.at(-1); const raw = t ? s.points.find(([d]) => d === t)?.[1] : s.points.at(-1)[1];
-        const shown = pt?.value === undefined ? "—" : mode === "z" ? `z ${pt.value.toFixed(2)}${raw !== undefined ? ` (${miVal(s, raw)})` : ""}` : miVal(s, pt.value);
-        return `<span><i style="background:${s.color}"></i>${esc(s.name)} <b>${shown}</b></span>`;
-      }).join("") + `<small>${t ? esc(String(t)) : "最新"}${mode === "z" ? " · z値 = (値 − 期間の平均) ÷ 標準偏差" : ""}</small>`;
+    // 価格軸: % と log は段ごとに。負の値を含む段(差など)は log・% にできないので通常のまま
+    const panes = miChart.panes();
+    panes.forEach((p, i) => { p.setStretchFactor(1); const list = miSeries.filter((x) => x.e.pane === i); const nonPos = list.some((x) => x.pts.some(([, v]) => v <= 0)); list[0]?.sr.priceScale().applyOptions({ mode: nonPos ? 0 : mode }); });
+    const from = miRangeStart(); const allDates = miSeries.flatMap((x) => x.pts.map((p) => p[0])); const to = allDates.sort().at(-1);
+    if (S.set.miRange === "ALL" || !to) miChart.timeScale().fitContent();
+    else { try { miChart.timeScale().setVisibleRange({ from: allDates.find((d) => d >= from) || from, to }); } catch { miChart.timeScale().fitContent(); } }
+    const rt = $("#miRangeTxt"); if (rt) rt.textContent = to ? `${S.set.miRange === "ALL" ? allDates[0] : from}〜${to}` : "";
+    // 各段の左上に凡例(名前・値・変化、ホバーで ↑ ↓ 👁 ✕)
+    const valOf = (x, t) => { const p = t ? x.pts.find(([d]) => d === t) : x.pts.at(-1); if (!p) return { v: "—", c: "" }; const i = x.pts.indexOf(p); const prev = i > 0 ? x.pts[i - 1][1] : null; const ch = prev === null ? null : x.s.chg === "pct" ? (prev ? p[1] / prev - 1 : null) : p[1] - prev; return { v: miVal(x.s, p[1]), c: miChg(x.s, ch) }; };
+    const drawLegends = () => {
+      let y = 0; const out = [];
+      miChart.panes().forEach((p, i) => {
+        const h = p.getHeight() || paneH; // eslint-disable-line
+        const rows = miSeries.filter((x) => x.e.pane === i).map((x) => { const { v, c } = valOf(x, null); return `<div class="lg-ind ${x.e.hidden ? "off" : ""}" data-mi-lg="${esc(x.s.id)}" title="${esc(x.s.desc || x.s.src)}"><i class="mi-dot" style="background:${x.s.color}"></i><b>${esc(x.s.name)}</b><span class="mi-lv" data-mi-v="${esc(x.s.id)}">${v}</span><em class="mi-lc" data-mi-c="${esc(x.s.id)}">${c}</em><small class="mi-lf">${iv === "1d" ? esc(x.s.freq) : iv === "1w" ? "週足" : "月足"}</small><span class="lg-btns"><button type="button" data-lg-act="up" title="上の段へ">↑</button><button type="button" data-lg-act="down" title="下の段へ(他と同じ段なら新しい段へ)">↓</button><button type="button" data-lg-act="eye" title="表示/非表示">👁</button><button type="button" data-lg-act="del" title="外す">✕</button></span></div>`; }).join("");
+        out.push(`<div class="mi-plg" style="top:${y + 4}px">${rows}</div>`); y += h + 1;
+      });
+      $("#miLegends").innerHTML = out.join("");
     };
-    legend(null); miChart.subscribeCrosshairMove((p) => legend(p.time ? p : null));
+    // 大きさの自動調整(autoSize)が後から段の高さを配り直すので、描いた直後と次のフレームで高さをそろえ直す
+    // 段は同じ比率で分ける(setStretchFactor)。高さは大きさの自動調整(autoSize)の後に決まるので、次のフレームで凡例を置き直す
+    drawLegends(); requestAnimationFrame(() => requestAnimationFrame(() => { if (miChart) drawLegends(); })); setTimeout(() => { if (miChart) drawLegends(); }, 150);
+    // 段の境目をドラッグして高さを変えたときも凡例の位置を合わせる
+    el.onpointerup = () => setTimeout(() => { if (miChart) drawLegends(); }, 30);
+    miChart.subscribeCrosshairMove((param) => {
+      const t = param?.time ? String(param.time) : null;
+      miSeries.forEach((x) => { const { v, c } = valOf(x, t); const a = $(`[data-mi-v="${CSS.escape(x.s.id)}"]`), b = $(`[data-mi-c="${CSS.escape(x.s.id)}"]`); if (a) a.textContent = v.replace(/<[^>]+>/g, ""); if (b) b.innerHTML = c; });
+    });
   }
-  // 選んだ日足の系列どうしの日々の変化の相関。日本の D と米国の系列は「D より前の米国の最新の値」を対応させる
+  // ---------- 指標を追加(TradingView の比較・インジケーターのダイアログと同じ形) ----------
+  const MI_KINDS = [["all", "すべて"], ["vol", "ボラティリティ"], ["ratio", "比率・差"], ["idx", "株価指数"], ["fx", "金利・為替"], ["jpx", "需給(JPX)"], ["wk", "市況(週足)"]];
+  const miKindOf = (s) => (s.group.endsWith("(週足)") ? "wk" : s.group.startsWith("ボラティリティ") ? "vol" : s.group === "比率・差" ? "ratio" : s.group === "株価指数" ? "idx" : s.group === "金利・為替" ? "fx" : s.group === "需給(JPX)" ? "jpx" : "wk");
+  let miKind = "all";
+  function openMiModal() { const m = $("#miModal"); m.hidden = false; const i = $("#miModalInput"); i.value = ""; i.focus(); drawMiModal(); }
+  function miModalList() {
+    const q = ($("#miModalInput").value || "").trim().toLowerCase();
+    return (S.miCat || []).filter((s) => (miKind === "all" || miKindOf(s) === miKind) && (!q || `${s.name} ${s.id} ${s.src} ${s.group}`.toLowerCase().includes(q)));
+  }
+  function drawMiModal() {
+    $("#miModalKinds").innerHTML = MI_KINDS.map(([k, l]) => `<button type="button" data-mi-kind="${k}" class="${miKind === k ? "active" : ""}">${l}</button>`).join("");
+    const lay = S.set.miLayout || []; const list = miModalList();
+    const groups = [...new Set(list.map((s) => s.group))];
+    $("#miModalList").innerHTML = groups.map((g) => `<h4>${esc(g)}</h4>${list.filter((s) => s.group === g).map((s) => { const on = lay.some((x) => x.id === s.id); return `<button type="button" class="ind-row mi-row ${on ? "on" : ""}" data-mi-pick="${esc(s.id)}"><span class="chk">${on ? "✓" : ""}</span><i class="mi-dot" style="background:${s.color}"></i><span class="mi-rn">${esc(s.name)}<small>${esc(s.src)} · ${esc(s.freq)} · ${esc(s.stats.first)}〜</small></span><span class="num">${miVal(s, s.stats.last)}</span><span class="num">${miChg(s, s.stats.c1)}</span></button>`; }).join("")}`).join("") || '<p class="muted pad">見つかりません</p>';
+  }
+  function bindMiModal() {
+    if (bindMiModal.done) return; bindMiModal.done = true;
+    $("#miModalInput").addEventListener("input", drawMiModal);
+    $("#miModalInput").addEventListener("keydown", (e) => { if (e.key === "Enter") { const f = miModalList()[0]; if (f) { miToggle(f.id); drawMiModal(); renderIndicators(); } } });
+    $("#miModalKinds").addEventListener("click", (e) => { const b = e.target.closest("[data-mi-kind]"); if (!b) return; miKind = b.dataset.miKind; drawMiModal(); });
+    $("#miModalList").addEventListener("click", (e) => { const b = e.target.closest("[data-mi-pick]"); if (!b) return; miToggle(b.dataset.miPick); drawMiModal(); renderIndicators(); });
+    document.addEventListener("fullscreenchange", () => { if (S.view === "indicators") drawMiChart(); });
+  }
+  // 表示中の日足の系列どうしの日々の変化の相関。日本の D と米国の系列は「D より前の米国の最新の値」を対応させる
   function miCorrHtml() {
     const from = miRangeStart();
-    const list = S.set.miSel.map((id) => S.miById.get(id)).filter((s) => s && s.freq === "日足");
-    const weekly = S.set.miSel.map((id) => S.miById.get(id)).filter((s) => s && s.freq !== "日足");
+    const shown = (S.set.miLayout || []).filter((x) => !x.hidden).map((x) => S.miById.get(x.id)).filter(Boolean);
+    const list = shown.filter((s) => s.freq === "日足"); const weekly = shown.filter((s) => s.freq !== "日足");
     if (list.length < 2) return "";
     const chg = (s) => { const p = s.points.filter(([d]) => d >= from); const out = []; for (let i = 1; i < p.length; i++) { const a = p[i - 1][1], b = p[i][1]; const x = s.ret === "log" ? (a > 0 && b > 0 ? Math.log(b / a) : null) : b - a; if (x !== null && Number.isFinite(x)) out.push([p[i][0], x]); } return out; };
     const C = list.map(chg);
@@ -2739,18 +2813,34 @@
       return { r: sxx && syy ? sxy / Math.sqrt(sxx * syy) : null, n };
     };
     const cell = (i, j) => { if (i === j) return "<td>—</td>"; const { r, n } = corr(i, j); if (r === null) return `<td title="${n}組">—</td>`; return `<td title="${n}組" style="background:${alpha(r >= 0 ? "#2962ff" : "#e0584f", Math.min(0.55, Math.abs(r) * 0.6))}">${r.toFixed(2)}</td>`; };
-    return `<section class="panel"><div class="row-head"><h3>日々の変化の相関</h3><small>チャートと同じ期間 · 水準は対数の変化、金利・差・比率(%)は差分 · 日本の日付 D には、その時点で分かっている米国の前の営業日の値を対応(同じ市場どうしは同じ日)· セルにカーソルで組の数</small></div><div class="table-wrap"><table class="grid"><thead><tr><th></th>${list.map((s) => `<th>${esc(s.name)}</th>`).join("")}</tr></thead><tbody>${list.map((s, i) => `<tr><th>${esc(s.name)}</th>${list.map((_, j) => cell(i, j)).join("")}</tr>`).join("")}</tbody></table></div>${weekly.length ? `<p class="foot">週足・週次の系列(${weekly.map((s) => esc(s.name)).join("・")})は日付が日足と揃わないので相関から除いています。</p>` : ""}</section>`;
+    return `<section class="panel"><div class="row-head"><h3>日々の変化の相関</h3><small>下の期間バーで選んだ期間 · 非表示(👁)の指標は除く · 水準は対数の変化、金利・差・比率(%)は差分 · 日本の日付 D には、その時点で分かっている米国の前の営業日の値を対応(同じ市場どうしは同じ日)· セルにカーソルで組の数</small></div><div class="table-wrap"><table class="grid"><thead><tr><th></th>${list.map((s) => `<th>${esc(s.name)}</th>`).join("")}</tr></thead><tbody>${list.map((s, i) => `<tr><th>${esc(s.name)}</th>${list.map((_, j) => cell(i, j)).join("")}</tr>`).join("")}</tbody></table></div>${weekly.length ? `<p class="foot">週足・週次の系列(${weekly.map((s) => esc(s.name)).join("・")})は日付が日足と揃わないので相関から除いています。</p>` : ""}</section>`;
   }
   function miTableHtml(cat) {
-    const rows = cat.map((s) => { const st = s.stats; return `<tr class="${S.set.miSel.includes(s.id) ? "sel" : ""}" data-mi="${esc(s.id)}" title="${esc(s.desc || "")}"><th><i class="mi-dot" style="background:${s.color}"></i>${esc(s.name)}<small>${esc(s.group)}</small></th><td>${miVal(s, st.last)}</td><td><small>${esc(st.date)}</small></td><td>${miChg(s, st.c1)}</td><td>${miChg(s, st.c5)}</td><td>${miChg(s, st.c20)}</td><td>${miVal(s, st.avg1y)}</td><td>${miPos(st.pos1y)}</td><td>${miPos(st.posAll)}</td><td><small>${esc(st.first)}〜 · ${esc(s.freq)}</small></td><td><small>${esc(s.src)}</small></td></tr>`; }).join("");
+    const rows = cat.map((s) => { const st = s.stats; return `<tr class="${(S.set.miLayout || []).some((x) => x.id === s.id) ? "sel" : ""}" data-mi="${esc(s.id)}" title="${esc(s.desc || "")}"><th><i class="mi-dot" style="background:${s.color}"></i>${esc(s.name)}<small>${esc(s.group)}</small></th><td>${miVal(s, st.last)}</td><td><small>${esc(st.date)}</small></td><td>${miChg(s, st.c1)}</td><td>${miChg(s, st.c5)}</td><td>${miChg(s, st.c20)}</td><td>${miVal(s, st.avg1y)}</td><td>${miPos(st.pos1y)}</td><td>${miPos(st.posAll)}</td><td><small>${esc(st.first)}〜 · ${esc(s.freq)}</small></td><td><small>${esc(s.src)}</small></td></tr>`; }).join("");
     return `<section class="panel"><div class="row-head"><h3>指標の一覧(${cat.length})</h3><small>行を押すとチャートに追加・削除 · 変化は株価指数・為替・週足の市況は %、それ以外は差(ポイント)· 週足は 1本=1週 · 「位置」はその期間の中で今の値より低かった日の割合</small></div><div class="table-wrap tall"><table class="grid mi-table"><thead><tr><th>指標</th><th>最新</th><th>日付</th><th>1本前比</th><th>5本前比</th><th>20本前比</th><th>1年平均</th><th>1年の中の位置</th><th>全期間の位置</th><th>期間</th><th>出典</th></tr></thead><tbody>${rows}</tbody></table></div></section>`;
   }
   function bindIndicators(body) {
-    const toggle = (id) => { const a = S.set.miSel || []; S.set.miSel = a.includes(id) ? a.filter((x) => x !== id) : [...a, id]; saveSettings(); renderIndicators(); };
-    $$("[data-mi]", body).forEach((el) => el.addEventListener("click", () => toggle(el.dataset.mi)));
-    $$("[data-mi-range]", body).forEach((el) => el.addEventListener("click", () => { S.set.miRange = el.dataset.miRange; saveSettings(); renderIndicators(); }));
-    $$("[data-mi-mode]", body).forEach((el) => el.addEventListener("click", () => { S.set.miMode = el.dataset.miMode; saveSettings(); renderIndicators(); }));
-    $$("[data-mi-preset]", body).forEach((el) => el.addEventListener("click", () => { const p = el.dataset.miPreset; S.set.miSel = p === "clear" ? [] : MI_PRESETS[Number(p)][1].filter((id) => S.miById.has(id)); saveSettings(); renderIndicators(); }));
+    bindMiModal();
+    const re = () => { saveSettings(); renderIndicators(); };
+    $$("[data-mi]", body).forEach((el) => el.addEventListener("click", () => { miToggle(el.dataset.mi); renderIndicators(); }));
+    ["#miAddBtn", "#miAddBtn2"].forEach((sel) => $(sel, body)?.addEventListener("click", openMiModal));
+    $$("[data-mi-iv]", body).forEach((el) => el.addEventListener("click", () => { S.set.miIv = el.dataset.miIv; re(); }));
+    $$("[data-mi-range]", body).forEach((el) => el.addEventListener("click", () => { S.set.miRange = el.dataset.miRange; re(); }));
+    $$("[data-mi-scale]", body).forEach((el) => el.addEventListener("click", () => { S.set.miScale = Number(el.dataset.miScale); re(); }));
+    $$("[data-mi-act]", body).forEach((el) => el.addEventListener("click", () => {
+      const act = el.dataset.miAct;
+      if (act === "fit") miChart?.timeScale().fitContent();
+      if (act === "shot" && miChart) { const a = document.createElement("a"); a.href = miChart.takeScreenshot().toDataURL("image/png"); a.download = `market_indicators_${new Date().toISOString().slice(0, 10)}.png`; a.click(); }
+      if (act === "full") { const tv = $("#miTv"); if (document.fullscreenElement) document.exitFullscreen(); else tv.requestFullscreen?.().catch(() => toast("全画面にできませんでした")); }
+    }));
+    $("#miLegends", body)?.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-lg-act]"); const row = e.target.closest("[data-mi-lg]"); if (!b || !row) return;
+      const id = row.dataset.miLg; const act = b.dataset.lgAct;
+      if (act === "del") miToggle(id);
+      if (act === "up" || act === "down") miMove(id, act === "up" ? -1 : 1);
+      if (act === "eye") { const x = S.set.miLayout.find((y) => y.id === id); if (x) { if (x.hidden) delete x.hidden; else x.hidden = true; saveSettings(); } }
+      renderIndicators();
+    });
   }
 
   // =====================================================================

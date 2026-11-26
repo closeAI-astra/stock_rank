@@ -10,7 +10,7 @@
   <meta name="referrer" content="no-referrer">
   <title>Stock Rank</title>
   <link rel="icon" type="image/png" href="assets/future-sight-logo.png">
-  <link rel="stylesheet" href="assets/css/app.css?v=ae1bc8d151">
+  <link rel="stylesheet" href="assets/css/app.css?v=46adedb754">
   <script src="assets/js/preload.js?v=06519fa1e5"></script>
 </head>
 <body>
@@ -146,7 +146,7 @@
 
     <!-- 市場の指標 -->
     <section class="view page" data-view="indicators">
-      <div class="page-head"><p class="eyebrow">VOLATILITY · RATIOS · SUPPLY</p><h1>市場の指標</h1><p>日経VI・VIX・NT倍率をはじめ、ボラティリティ指数・期間構造・株価指数・金利・為替・JPX の需給・市況を、1つのチャートに重ねて見比べるページ。</p></div>
+      <div class="page-head"><p class="eyebrow">VOLATILITY · RATIOS · SUPPLY</p><h1>市場の指標</h1><p>日経VI・VIX・NT倍率をはじめ、ボラティリティ指数・期間構造・株価指数・金利・為替・JPX の需給・市況を、TradingView と同じ操作(＋で追加・凡例から段の移動/非表示/削除)で重ねて見比べるページ。</p></div>
       <div id="indBody"></div>
     </section>
 
@@ -214,6 +214,10 @@
     <input id="symModalInput" type="search" placeholder="コード・社名・指数名(例: 7203 / トヨタ / 日経)" autocomplete="off">
     <div class="modal-filters seg" role="group"><button type="button" data-symkind="all" class="active">すべて</button><button type="button" data-symkind="stock">株式</button><button type="button" data-symkind="index">指数</button></div>
     <div id="symModalList" class="modal-list"></div></div></div>
+  <div class="modal" id="miModal" hidden><div class="modal-box" role="dialog" aria-label="指標を追加"><header><b>指標を追加</b><button type="button" class="tv-ibtn" data-close>✕</button></header>
+    <input id="miModalInput" type="search" placeholder="指標名(例: 日経VI / VIX / NT / SOX / 空売り)" autocomplete="off">
+    <div class="modal-filters seg" id="miModalKinds" role="group"></div>
+    <div id="miModalList" class="modal-list"></div></div></div>
   <div class="modal" id="tradeModal" hidden><div class="modal-box trade-box" role="dialog" aria-label="売買を記録"><header><b id="tradeModalTitle">売買を記録</b><button type="button" class="tv-ibtn" data-close>✕</button></header>
     <form id="tradeForm" class="trade-form">
       <div class="seg trade-side"><label><input type="radio" name="side" value="buy" checked><span>買い</span></label><label><input type="radio" name="side" value="sell"><span>売り</span></label></div>
@@ -238,6 +242,6 @@
   <script src="assets/js/explore.js?v=e48161fdac"></script>
   <script src="assets/js/calendar.js?v=b45de4fd75"></script>
   <script src="assets/js/drawings.js?v=853bb759a2"></script>
-  <script src="assets/js/app.js?v=496036f439"></script>
+  <script src="assets/js/app.js?v=9b2e10fdc2"></script>
 </body>
 </html>

@@ -566,18 +566,25 @@ table.ex-mat td:hover { outline: 2px solid var(--accent); }
 .grid td.col-fc, .grid th.col-fc { background: rgba(255, 179, 0, 0.07); }
 .grid td.col-act, .grid th.col-act { background: rgba(138, 143, 152, 0.08); }
 
-/* 市場の指標 */
-.mi-cards { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); margin-bottom: 6px; }
-.mi-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
-.mi-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 10px; }
-.mi-chart { position: relative; height: 420px; }
-.mi-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; margin: 2px 0 6px; font-variant-numeric: tabular-nums; }
-.mi-legend i { display: inline-block; width: 10px; height: 3px; border-radius: 2px; margin-right: 5px; vertical-align: 3px; }
-.mi-legend small { color: var(--muted); }
-.mi-notes { margin: 10px 0 4px; padding-left: 18px; font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
-.mi-picker { display: grid; gap: 8px; margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
-.mi-group { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.mi-group > span { font-size: 11px; color: var(--muted); min-width: 150px; }
+/* 市場の指標(TradingView 型) */
+.mi-cards { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); margin-bottom: 10px; }
+.mi-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; flex: none; }
+.mi-tv { display: flex; flex-direction: column; border: 1px solid var(--tv-border); border-radius: 8px; overflow: hidden; background: var(--tv-bg); margin: 4px 0 12px; }
+.mi-tv:fullscreen { border-radius: 0; height: 100vh; }
+.mi-tv:fullscreen .mi-wrap { flex: 1; }
+.mi-wrap { height: 450px; flex: none; }
+.mi-legends { position: absolute; inset: 0; pointer-events: none; z-index: 5; }
+.mi-plg { position: absolute; left: 8px; display: flex; flex-direction: column; gap: 0; font-size: 12px; color: var(--tv-text); }
+.mi-plg .lg-ind { width: max-content; gap: 6px; }
+.mi-lv { font-weight: 600; font-variant-numeric: tabular-nums; }
+.mi-lc { font-style: normal; font-size: 11px; font-variant-numeric: tabular-nums; }
+.mi-lf { color: var(--tv-muted); font-size: 10px; }
+.mi-empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 8px; z-index: 6; color: var(--tv-muted); }
+.mi-rtxt { font-size: 11px; color: var(--tv-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.mi-row .mi-rn { flex: 1; min-width: 0; } .mi-row .mi-rn small { display: block; color: var(--tv-muted); font-size: 11px; }
+.mi-row .num { width: 80px; text-align: right; font-variant-numeric: tabular-nums; }
+.mi-notes-box { margin: 0 0 8px; font-size: 12px; } .mi-notes-box summary { cursor: pointer; color: var(--muted); }
+.mi-notes { margin: 6px 0 4px; padding-left: 18px; font-size: 12px; color: var(--muted); display: grid; gap: 3px; }
 .mi-table tbody tr { cursor: pointer; }
 .mi-table tbody tr.sel th, .mi-table tbody tr.sel td { background: var(--accent-soft); }
 .mi-table th small { display: block; color: var(--muted); font-weight: 400; font-size: 10px; }
