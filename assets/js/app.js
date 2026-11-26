@@ -2562,7 +2562,7 @@
   const MI_PALETTE = ["#e0584f", "#2962ff", "#ff9800", "#26a69a", "#ab47bc", "#8d6e63", "#00acc1", "#7cb342", "#ec407a", "#5c6bc0", "#ffca28", "#78909c"];
   const MI_RANGES = [["1M", "1か月", 31], ["3M", "3か月", 92], ["6M", "6か月", 183], ["YTD", "年初来", 0], ["1Y", "1年", 366], ["2Y", "2年", 731], ["5Y", "5年", 1827], ["ALL", "全期間", 0]];
   // 新しく足したとき同じ段に入れる単位。ここに無い系列は新しい段
-  const MI_SCALE = { NKVI: "vol", VIX: "vol", VIX9D: "vol", VIX3M: "vol", VIX6M: "vol", VXN: "vol", OVX: "vol", GVZ: "vol", VVIX: "volhi", SKEW: "volhi", MOVE: "volhi", VIXTS: "ratio1", VIX9DR: "ratio1" };
+  const MI_SCALE = { NKVI: "vol", VIX: "vol", VIX9D: "vol", VIX3M: "vol", VIX6M: "vol", VXN: "vol", OVX: "vol", GVZ: "vol", VVIX: "volhi", SKEW: "volhi", MOVE: "volhi", VIXTS: "ratio1", VIX9DR: "ratio1", MARGIN: "mratio", MRATIO_D: "mratio", MBUY: "mshares", MSELL: "mshares" };
 
   function miClean(points) {
     const m = new Map();
@@ -2586,7 +2586,7 @@
     const vol = new Map((S.market?.options?.volIndices || []).filter((v) => v.available).map((v) => [v.symbol, v.series || []]));
     const macroItems = [...(S.macro?.markets || []).map((g) => ({ label: g.label, items: g.items })), ...(S.macro?.commodities?.groups || []).map((g) => ({ label: g.label, items: g.items }))];
     const weeklyOf = (sym) => macroItems.flatMap((g) => g.items).find((it) => it.sym === sym && it.available)?.weekly || [];
-    const G_JV = "ボラティリティ(日本)", G_UV = "ボラティリティ(米国)", G_R = "比率・差", G_I = "株価指数", G_F = "金利・為替", G_S = "需給(JPX)";
+    const G_JV = "ボラティリティ(日本)", G_UV = "ボラティリティ(米国)", G_R = "比率・差", G_I = "株価指数", G_F = "金利・為替", G_S = "需給(信用・空売り・裁定)";
 
     // 日経VI: 日足(約2年)。無ければ週足
     const nkvi = vol.get("NKVI") || vol.get("^JNIV");
@@ -2617,11 +2617,20 @@
     add({ id: "TNX", name: "米10年国債利回り", group: G_F, src: "指数ページ(^TNX)", points: idx("TNX"), digits: 3, tz: "US", ret: "diff", unit: "%" });
     add({ id: "USDJPY", name: "ドル円", group: G_F, src: "指数ページ(JPY=X)", points: idx("USDJPY"), chg: "pct", tz: "FX" });
 
+    // 信用残(市場全体): ランキング・信用ページや 指数→市場の信用残 と同じデータ
+    //   信用倍率・買残・売残 = JPX 信用取引現在高(2002年〜の週次)> 株探の保存、の順でつないだもの(marketCredit)
+    //   信用評価損益率 = 手入力 > data/events/margin_pl.json > stockAI の経済指標 > IRBANK の保存(marginTargets)
+    const mc = S.miCredit?.rows || []; const mcSrc = S.miCredit?.label || "JPX 信用取引現在高";
+    add({ id: "MPL", name: "信用評価損益率(買い方)", group: G_S, src: "公表値(2市場): IRBANK の保存・stockAI の経済指標・Claude の調査(stock-marketdata.com)", points: (S.miPl || []).map((r) => [r.date, r.y]), freq: "週次", digits: 2, ret: "diff", unit: "%",
+      desc: "信用で買っている人の含み損益の割合(東証+名証、毎週金曜の申込分を翌週火曜に公表)。−20% 前後で投げ売りが出て底入れ、−3〜0% で天井圏の目安" });
+    add({ id: "MARGIN", name: "信用倍率(2市場)", group: G_S, src: mcSrc, points: mc.map((r) => [r.date, num(r.ratio) ?? (num(r.buy) && num(r.sell) ? r.buy / r.sell : null)]), freq: "週次", digits: 2, desc: "信用買残 ÷ 信用売残(株数)。高いほど将来の売り(買い方の返済)が多い" });
+    add({ id: "MBUY", name: "信用買残(2市場・株数)", group: G_S, src: mcSrc, points: mc.map((r) => [r.date, r.buy]), freq: "週次", digits: 0, chg: "pct", desc: "信用で買って返済していない株数。増えるほど上値で売りが出やすい" });
+    add({ id: "MSELL", name: "信用売残(2市場・株数)", group: G_S, src: mcSrc, points: mc.map((r) => [r.date, r.sell]), freq: "週次", digits: 0, chg: "pct", desc: "信用で売って買い戻していない株数。多いほど踏み上げ(買い戻し)の燃料" });
+    add({ id: "MRATIO_D", name: "信用倍率(東証・日次の合計)", group: G_S, src: "JPX 銘柄別信用取引残高の全銘柄合計(翌営業日16時に判明。名証は含まない)", points: (S.market?.creditMarket?.daily || []).map((r) => [r.date, r.ratio]), digits: 2, desc: "週次の公表(2営業日後)より早く分かる、東証の全銘柄の毎日の信用残の合計の倍率。2026-09-25 から" });
     const im = S.instMarket;
     if (im) {
       add({ id: "SHORT", name: "空売り比率", group: G_S, src: "JPX 空売り集計(売買代金ベース)", points: (im.shortRatio || []).map((r) => [r.date, num(r.ratio) === null ? null : r.ratio * 100]), digits: 1, ret: "diff", unit: "%", desc: "東証の売買代金に占める空売りの割合。40% 超が続くと売られすぎ(買い戻し待ち)の目安" });
       add({ id: "ARB", name: "裁定買い残", group: G_S, src: `JPX 裁定取引(${im.arbitrageUnit || ""})`, points: (im.arbitrage || []).map((r) => [r.date, r.buy]), freq: "週次", digits: 0, chg: "pct", desc: "積み上がるほど、解消売り(先物主導の下げ)の余地が大きい" });
-      add({ id: "MARGIN", name: "信用倍率(東証全体)", group: G_S, src: "JPX 信用取引現在高", points: (im.margin || []).map((r) => [r.date, num(r.ratio) ?? (num(r.buy) && num(r.sell) ? r.buy / r.sell : null)]), freq: "週次", digits: 2, desc: "信用買残 ÷ 信用売残(株数)。高いほど将来の売り(買い方の返済)が多い" });
     }
     // 上に無い市況は 5年の週足で
     const dailySym = new Set(["^VIX9D", "^VIX", "^VIX3M", "^VIX6M", "^VVIX", "^SKEW", "^MOVE", "^VXN", "^OVX", "^GVZ", "NKVI", "^JNIV", "^TNX", "JPY=X", "^N225", "^TPX", "^GSPC", "^IXIC", "VIX/VIX3M", "VIX9D/VIX", "NT"]);
@@ -2680,7 +2689,8 @@
     const need = [];
     if (!S.market) need.push(SRData.fs("market").catch(() => ({})).then((x) => { S.market = x; }));
     if (!S.macro) need.push(SRData.fs("macro").catch(() => ({ error: true })).then((x) => { S.macro = x; }));
-    if (S.instMarket === undefined) need.push(SRData.own("inst/market").catch(() => null).then((x) => { if (S.instMarket === undefined) S.instMarket = x; }));
+    if (!S.miCredit) need.push(marketCredit().catch(() => null).then((x) => { S.miCredit = x || { rows: [] }; }));
+    if (!S.miPl) need.push(marginTargets().catch(() => []).then((x) => { S.miPl = x || []; }));
     if (need.length) { body.innerHTML = '<p class="muted pad">読み込み中…</p>'; await Promise.all(need); S.miCat = null; }
     if (S.view !== "indicators") return;
     const cat = miCatalog();
@@ -2689,7 +2699,7 @@
     if (!MI_RANGES.some(([k]) => k === S.set.miRange)) S.set.miRange = "1Y";
     const card = (id) => { const s = S.miById.get(id); if (!s) return ""; const st = s.stats;
       return `<button type="button" class="ec-card ${isOn(id) ? "sel" : ""}" data-mi="${esc(id)}" title="${esc(s.desc || "")}"><header><b><i class="mi-dot" style="background:${s.color}"></i>${esc(s.name)}</b><small>${esc(st.date)} · ${esc(s.freq)}</small></header><div class="ec-val"><strong>${miVal(s, st.last)}</strong><span>1年の中の位置 ${miPos(st.pos1y)}</span></div><div class="chgs"><span>1日 ${miChg(s, st.c1)}</span><span>5日 ${miChg(s, st.c5)}</span><span>20日 ${miChg(s, st.c20)}</span></div><div class="chgs"><span>1年平均 ${miVal(s, st.avg1y)}</span><span>1年の幅 ${miVal(s, st.lo1y)}〜${miVal(s, st.hi1y)}</span></div>${spark(s.points.slice(s.freq === "日足" ? -120 : -26).map((p) => p[1]), 220, 34, s.color)}</button>`; };
-    const cards = `<div class="ec-grid mi-cards">${["NKVI", "VIX", "NT", "NKVI_VIX", "VIXTS"].map(card).join("")}</div>`;
+    const cards = `<div class="ec-grid mi-cards">${["NKVI", "VIX", "NT", "MPL", "MARGIN", "NKVI_VIX", "VIXTS"].map(card).join("")}</div>`;
     const tv = `<div class="mi-tv" id="miTv">
       <div class="tv-top"><button type="button" class="tv-tbtn" id="miAddBtn" title="指標を追加(比較)"><b>＋</b> 指標を追加</button><span class="tv-sep"></span>
         <div class="tv-group" role="group" aria-label="足">${[["1d", "日"], ["1w", "週"], ["1mo", "月"]].map(([k, l]) => `<button type="button" data-mi-iv="${k}" class="${(S.set.miIv || "1d") === k ? "active" : ""}" title="${l}足">${l}</button>`).join("")}</div>
@@ -2739,7 +2749,7 @@
       const digits = Math.min(3, s.digits);
       const sr = miChart.addSeries(LW.LineSeries, { color: s.color, lineWidth: 2, title: "", visible: !e.hidden, priceLineVisible: false, lastValueVisible: !e.hidden, lineType: s.freq === "日足" || iv !== "1d" ? LW.LineType.Simple : LW.LineType.WithSteps, priceFormat: { type: "price", precision: digits, minMove: 10 ** -digits } }, e.pane);
       sr.setData(pts.map(([d, v]) => ({ time: d, value: v })));
-      const ref = s.id === "VIXTS" || s.id === "VIX9DR" ? 1 : s.id === "NKVI_VIX" ? 0 : s.id === "SHORT" ? 40 : null;
+      const ref = s.id === "VIXTS" || s.id === "VIX9DR" ? 1 : s.id === "NKVI_VIX" ? 0 : s.id === "SHORT" ? 40 : s.id === "MPL" ? -20 : null;
       if (ref !== null && mode === 0) sr.createPriceLine({ price: ref, color: css("--tv-grid2"), lineStyle: LW.LineStyle.Dashed, lineWidth: 1, axisLabelVisible: false, title: "" });
       miSeries.push({ s, e, sr, pts });
     });
@@ -2750,8 +2760,8 @@
     if (S.set.miRange === "ALL" || !to) miChart.timeScale().fitContent();
     else { try { miChart.timeScale().setVisibleRange({ from: allDates.find((d) => d >= from) || from, to }); } catch { miChart.timeScale().fitContent(); } }
     const rt = $("#miRangeTxt"); if (rt) rt.textContent = to ? `${S.set.miRange === "ALL" ? allDates[0] : from}〜${to}` : "";
-    // 各段の左上に凡例(名前・値・変化、ホバーで ↑ ↓ 👁 ✕)
-    const valOf = (x, t) => { const p = t ? x.pts.find(([d]) => d === t) : x.pts.at(-1); if (!p) return { v: "—", c: "" }; const i = x.pts.indexOf(p); const prev = i > 0 ? x.pts[i - 1][1] : null; const ch = prev === null ? null : x.s.chg === "pct" ? (prev ? p[1] / prev - 1 : null) : p[1] - prev; return { v: miVal(x.s, p[1]), c: miChg(x.s, ch) }; };
+    // 各段の左上に凡例(名前・値・変化、ホバーで ↑ ↓ 👁 ✕)。カーソルの日に値が無い系列(週次・休場日)はその日以前の直近の値
+    const valOf = (x, t) => { let i = x.pts.length - 1; if (t) { while (i >= 0 && x.pts[i][0] > t) i--; } const p = x.pts[i]; if (!p) return { v: "—", c: "" }; const prev = i > 0 ? x.pts[i - 1][1] : null; const ch = prev === null ? null : x.s.chg === "pct" ? (prev ? p[1] / prev - 1 : null) : p[1] - prev; return { v: miVal(x.s, p[1]), c: miChg(x.s, ch) }; };
     const drawLegends = () => {
       let y = 0; const out = [];
       miChart.panes().forEach((p, i) => {
@@ -2772,8 +2782,8 @@
     });
   }
   // ---------- 指標を追加(TradingView の比較・インジケーターのダイアログと同じ形) ----------
-  const MI_KINDS = [["all", "すべて"], ["vol", "ボラティリティ"], ["ratio", "比率・差"], ["idx", "株価指数"], ["fx", "金利・為替"], ["jpx", "需給(JPX)"], ["wk", "市況(週足)"]];
-  const miKindOf = (s) => (s.group.endsWith("(週足)") ? "wk" : s.group.startsWith("ボラティリティ") ? "vol" : s.group === "比率・差" ? "ratio" : s.group === "株価指数" ? "idx" : s.group === "金利・為替" ? "fx" : s.group === "需給(JPX)" ? "jpx" : "wk");
+  const MI_KINDS = [["all", "すべて"], ["vol", "ボラティリティ"], ["ratio", "比率・差"], ["idx", "株価指数"], ["fx", "金利・為替"], ["jpx", "需給"], ["wk", "市況(週足)"]];
+  const miKindOf = (s) => (s.group.endsWith("(週足)") ? "wk" : s.group.startsWith("ボラティリティ") ? "vol" : s.group === "比率・差" ? "ratio" : s.group === "株価指数" ? "idx" : s.group === "金利・為替" ? "fx" : s.group.startsWith("需給") ? "jpx" : "wk");
   let miKind = "all";
   function openMiModal() { const m = $("#miModal"); m.hidden = false; const i = $("#miModalInput"); i.value = ""; i.focus(); drawMiModal(); }
   function miModalList() {
